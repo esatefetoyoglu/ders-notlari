@@ -584,9 +584,8 @@
 
     function renderCategories() {
       const container = document.getElementById('categoryPills');
-      const select = document.getElementById('courseSelect');
+      if (!container) return;
       container.innerHTML = '';
-      select.innerHTML = '';
 
       courses.forEach(cat => {
         const btn = document.createElement('button');
@@ -601,15 +600,8 @@
           renderFiles();
         };
         container.appendChild(btn);
-      populateUploadSelects();
-
-        if (cat !== 'Tümü') {
-          const opt = document.createElement('option');
-          opt.value = cat;
-          opt.textContent = cat;
-          select.appendChild(opt);
-        }
       });
+      populateUploadSelects();
     }
 
     function renderFiles() {
@@ -995,48 +987,83 @@
 
     function openUploadModal() {
       populateUploadSelects();
-      document.getElementById('uploadForm').reset();
+      const f1 = document.getElementById('driveUploadForm');
+      const f2 = document.getElementById('localUploadForm');
+      if (f1) f1.reset();
+      if (f2) f2.reset();
+      switchUploadMode('drive');
       document.getElementById('uploadModal').classList.remove('hidden');
     }
-    function closeUploadModal() { document.getElementById('uploadModal').classList.add('hidden'); }
+    function closeUploadModal() { 
+      document.getElementById('uploadModal').classList.add('hidden'); 
+    }
 
-    function promptNewCourse() {
-      const name = prompt('Yeni ders adı:');
-      if (name && name.trim()) {
-        const tr = name.trim();
-        if (!courses.includes(tr)) {
-          courses.push(tr); renderCategories();
-          document.getElementById('courseSelect').value = tr;
+    async function promptNewCourse() {
+      const name = prompt('Yeni ders / kategori adını girin:');
+      if (!name || !name.trim()) return;
+      const tr = name.trim();
+
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const formData = new FormData();
+        formData.append('course_name', tr);
+
+        const res = await fetch('/api/courses', { method: 'POST', body: formData, headers });
+        const data = await res.json();
+        if (res.ok) {
+          if (!courses.includes(tr)) {
+            courses.push(tr);
+          }
+          renderCategories();
+          populateUploadSelects();
+          const s1 = document.getElementById('driveCourseSelect');
+          const s2 = document.getElementById('localCourseSelect');
+          if (s1) s1.value = tr;
+          if (s2) s2.value = tr;
+          alert(`✓ "${tr}" dersi başarıyla eklendi!`);
+        } else {
+          alert('Ders eklenemedi: ' + (data.detail || 'Yetkisiz'));
         }
+      } catch (err) {
+        alert('Hata: ' + err);
       }
     }
 
     async function handleUpload(e) {
       e.preventDefault();
       const fileInput = document.getElementById('pdfFileInput');
-      const course = document.getElementById('courseSelect').value;
-      if (!fileInput.files.length) return;
+      const course = document.getElementById('localCourseSelect').value;
+      if (!fileInput.files.length) {
+        alert('Lütfen bir PDF dosyası seçin.');
+        return;
+      }
 
       const formData = new FormData();
       formData.append('file', fileInput.files[0]);
       formData.append('course', course);
 
       const btn = document.getElementById('uploadSubmitBtn');
-      btn.disabled = true; btn.textContent = 'Yükleniyor...';
+      btn.disabled = true; 
+      btn.textContent = 'Yükleniyor...';
 
       try {
-        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/upload', { method: 'POST', body: formData, headers });
+        const data = await res.json();
         if (res.ok) {
+          alert('✓ ' + (data.message || 'Dosya başarıyla yüklendi!'));
           closeUploadModal();
           await loadData();
         } else {
-          const data = await res.json();
-          alert('Yükleme hatası: ' + (data.detail || 'Yetkisiz'));
+          alert('Yükleme hatası: ' + (data.detail || 'Yetkisiz işlem'));
         }
       } catch (err) {
         alert('Sunucu hatası: ' + err);
       } finally {
-        btn.disabled = false; btn.textContent = 'Yükle';
+        btn.disabled = false; 
+        btn.textContent = 'Dosyayı Yükle';
       }
     }
 

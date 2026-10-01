@@ -16,12 +16,40 @@ app = FastAPI(title="Ders Notları & PDF Portalı")
 
 BASE_UPLOAD_DIR = "uploads"
 AUTH_FILE = "users.json"
-SESSION_TIMEOUT_SECONDS = 24 * 3600  # 24 saatlik aktiflik süresi
+COURSES_FILE = "courses.json"
+SESSION_TIMEOUT_SECONDS = 24 * 3600  # 24 hours
 os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
 
 DEFAULT_COURSES = ["Kadın Doğum Hemşireliği", "İç Hastalıkları", "Cerrahi Hastalıkları", "Sağlık Tanılaması", "Genel"]
-for course in DEFAULT_COURSES:
-    os.makedirs(os.path.join(BASE_UPLOAD_DIR, course), exist_ok=True)
+
+def get_all_courses() -> List[str]:
+    courses = set(DEFAULT_COURSES)
+    if os.path.exists(COURSES_FILE):
+        try:
+            with open(COURSES_FILE, "r", encoding="utf-8") as f:
+                courses.update(json.load(f))
+        except Exception:
+            pass
+    if os.path.exists(BASE_UPLOAD_DIR):
+        try:
+            for d in os.listdir(BASE_UPLOAD_DIR):
+                if os.path.isdir(os.path.join(BASE_UPLOAD_DIR, d)):
+                    courses.add(d)
+        except Exception:
+            pass
+    return sorted(list(courses))
+
+def add_course_to_store(name: str) -> None:
+    courses = get_all_courses()
+    if name not in courses:
+        courses.append(name)
+    with open(COURSES_FILE, "w", encoding="utf-8") as f:
+        json.dump(courses, f, ensure_ascii=False, indent=2)
+    os.makedirs(os.path.join(BASE_UPLOAD_DIR, name), exist_ok=True)
+
+# Ensure default course directories exist
+for c in DEFAULT_COURSES:
+    os.makedirs(os.path.join(BASE_UPLOAD_DIR, c), exist_ok=True)
 
 # --- Authentication Helpers ---
 def hash_password(password: str, salt: str = None) -> tuple:
@@ -82,13 +110,13 @@ def get_current_user(request: Request) -> Optional[dict]:
         last_active = session_info.get("last_active", 0)
 
     now = time.time()
-    # 24 saat içinde tekrar girmediyse oturumu sonlandır
+    # 24-hour inactivity check
     if now - last_active > SESSION_TIMEOUT_SECONDS:
         del data["sessions"][token]
         save_auth_data(data)
         return None
 
-    # 24 saat içinde tekrar girdiyse süreyi 24 saat daha uzat (sliding expiration)
+    # Sliding expiration: renew last_active
     data["sessions"][token]["last_active"] = now
     save_auth_data(data)
 
@@ -189,6 +217,10 @@ async def login(response: Response, username: str = Form(...), password: str = F
 @app.post("/api/auth/logout")
 async def logout(request: Request, response: Response):
     token = request.cookies.get("session_token")
+    if not token:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
     if token:
         data = load_auth_data()
         if token in data.get("sessions", {}):
@@ -240,19 +272,21 @@ async def list_files(request: Request):
         raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
 
     data = []
-    courses = [d for d in os.listdir(BASE_UPLOAD_DIR) if os.path.isdir(os.path.join(BASE_UPLOAD_DIR, d))]
-    courses.sort()
+    courses = get_all_courses()
     
     for course in courses:
         c_path = os.path.join(BASE_UPLOAD_DIR, course)
+        if not os.path.exists(c_path):
+            continue
         for fname in os.listdir(c_path):
             if fname.lower().endswith(".pdf"):
                 fpath = os.path.join(c_path, fname)
-                size = os.path.getsize(fpath)
                 try:
+                    size = os.path.getsize(fpath)
                     reader = PdfReader(fpath)
                     page_count = len(reader.pages)
                 except Exception:
+                    size = 0
                     page_count = 1
                 data.append({
                     "course": course,
@@ -263,6 +297,19 @@ async def list_files(request: Request):
                 })
     return {"courses": courses, "files": data}
 
+@app.post("/api/courses")
+async def create_course(request: Request, course_name: str = Form(...)):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin ders ekleyebilir.")
+        
+    clean_name = re.sub(r'[^a-zA-Z0-9_\-\.\sğüşıöçĞÜŞİÖÇ]', '', course_name).strip()
+    if not clean_name:
+        raise HTTPException(status_code=400, detail="Geçersiz ders adı.")
+        
+    add_course_to_store(clean_name)
+    return {"status": "success", "course": clean_name}
+
 @app.post("/api/upload")
 async def upload_pdf(request: Request, course: str = Form(...), file: UploadFile = File(...)):
     user = get_current_user(request)
@@ -272,6 +319,7 @@ async def upload_pdf(request: Request, course: str = Form(...), file: UploadFile
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Sadece PDF dosyaları yüklenebilir.")
     
+    add_course_to_store(course)
     c_path = os.path.join(BASE_UPLOAD_DIR, course)
     os.makedirs(c_path, exist_ok=True)
     
@@ -298,6 +346,7 @@ async def upload_drive_pdf(request: Request, course: str = Form(...), drive_url:
     else:
         raise HTTPException(status_code=400, detail="Geçersiz Google Drive bağlantısı.")
 
+    add_course_to_store(course)
     c_path = os.path.join(BASE_UPLOAD_DIR, course)
     os.makedirs(c_path, exist_ok=True)
 
