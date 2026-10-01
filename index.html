@@ -672,7 +672,7 @@
             </button>
 
             <div class="flex items-center gap-2">
-              <a href="/api/download/${encodeURIComponent(item.course)}/${encodeURIComponent(item.filename)}" 
+              <a href="/api/download?course=${encodeURIComponent(item.course)}&filename=${encodeURIComponent(item.filename)}&token=${encodeURIComponent(localStorage.getItem('session_token') || '')}" 
                 class="flex-1 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-3 rounded-xl transition-all text-center">
                 Tam İndir
               </a>
@@ -710,7 +710,7 @@
       document.getElementById('viewerTitle').textContent = title;
       document.getElementById('viewerCourse').textContent = course;
       document.getElementById('viewerModal').classList.remove('hidden');
-      const dl = document.getElementById('viewerDirectLink'); if (dl) dl.href = `/api/view/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`;
+      const dl = document.getElementById('viewerDirectLink'); if (dl) dl.href = `/api/view?course=${encodeURIComponent(course)}&filename=${encodeURIComponent(filename)}&token=${encodeURIComponent(token || "")}`;
 
       const loader = document.getElementById('viewerLoading');
       if (loader) loader.classList.remove('hidden');
@@ -722,12 +722,19 @@
       try {
         const token = localStorage.getItem('session_token');
         const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
-        const url = `/api/view/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`;
+        const url = `/api/view?course=${encodeURIComponent(course)}&filename=${encodeURIComponent(filename)}&token=${encodeURIComponent(token || '')}`;
         const res = await fetch(url, { headers });
 
         if (!res.ok) {
-          const errData = await res.json().catch(() => ({}));
-          throw new Error(errData.detail || 'Sunucudan PDF alınamadı');
+          const errorText = await res.text();
+          let msg = 'Sunucudan PDF alınamadı';
+          try {
+            const errData = JSON.parse(errorText);
+            msg = errData.detail || msg;
+          } catch(e) {
+            msg = errorText || msg;
+          }
+          throw new Error(msg);
         }
 
         currentPdfBytes = await res.arrayBuffer();
@@ -1173,7 +1180,7 @@
       if (!currentModalFile) return;
       const pages = document.getElementById('pageRangeInput').value.trim();
       if (!pages) return;
-      const url = `/api/download-range/${encodeURIComponent(currentModalFile.course)}/${encodeURIComponent(currentModalFile.filename)}?pages=${encodeURIComponent(pages)}`;
+      const token = localStorage.getItem('session_token') || ''; const url = `/api/download-range?course=${encodeURIComponent(currentModalFile.course)}&filename=${encodeURIComponent(currentModalFile.filename)}&pages=${encodeURIComponent(pages)}&token=${encodeURIComponent(token)}`;
       window.location.href = url;
       closeRangeModal();
     }

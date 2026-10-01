@@ -408,15 +408,35 @@ async def delete_pdf(request: Request, course: str, filename: str):
         return {"status": "success", "message": "Dosya silindi."}
     raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
 
+@app.get("/api/view")
 @app.get("/api/view/{course}/{filename}")
-async def view_pdf(request: Request, course: str, filename: str):
+async def view_pdf(request: Request, course: Optional[str] = None, filename: Optional[str] = None, token: Optional[str] = None):
+    # Support query params
+    if not course:
+        course = request.query_params.get("course")
+    if not filename:
+        filename = request.query_params.get("filename")
+    if not token:
+        token = request.query_params.get("token")
+
     user = get_current_user(request)
+    if not user and token:
+        data = load_auth_data()
+        s_info = data.get("sessions", {}).get(token)
+        if s_info:
+            u = s_info if isinstance(s_info, str) else s_info.get("username")
+            if u in data.get("users", {}):
+                user = data["users"][u]
+
     if not user:
         raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
 
+    if not course or not filename:
+        raise HTTPException(status_code=400, detail="Ders veya dosya adı eksik.")
+
     fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
     if not os.path.exists(fpath):
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
+        raise HTTPException(status_code=404, detail=f"'{filename}' dosyası sunucuda bulunamadı. Lütfen notu tekrar yükleyin.")
     
     def iterfile():
         with open(fpath, mode="rb") as file_like:
@@ -425,18 +445,37 @@ async def view_pdf(request: Request, course: str, filename: str):
     return StreamingResponse(
         iterfile(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'inline; filename="{filename}"'}
+        headers={
+            "Content-Disposition": f'inline; filename="{urllib.parse.quote(filename)}"',
+            "Content-Type": "application/pdf"
+        }
     )
 
+@app.get("/api/download")
 @app.get("/api/download/{course}/{filename}")
-async def download_full(request: Request, course: str, filename: str):
+async def download_full(request: Request, course: Optional[str] = None, filename: Optional[str] = None, token: Optional[str] = None):
+    if not course: course = request.query_params.get("course")
+    if not filename: filename = request.query_params.get("filename")
+    if not token: token = request.query_params.get("token")
+
     user = get_current_user(request)
+    if not user and token:
+        data = load_auth_data()
+        s_info = data.get("sessions", {}).get(token)
+        if s_info:
+            u = s_info if isinstance(s_info, str) else s_info.get("username")
+            if u in data.get("users", {}):
+                user = data["users"][u]
+
     if not user:
         raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
 
+    if not course or not filename:
+        raise HTTPException(status_code=400, detail="Ders veya dosya adı eksik.")
+
     fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
     if not os.path.exists(fpath):
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
+        raise HTTPException(status_code=404, detail=f"'{filename}' dosyası sunucuda bulunamadı.")
     
     def iterfile():
         with open(fpath, mode="rb") as file_like:
@@ -445,18 +484,35 @@ async def download_full(request: Request, course: str, filename: str):
     return StreamingResponse(
         iterfile(),
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+        headers={"Content-Disposition": f'attachment; filename="{urllib.parse.quote(filename)}"'}
     )
 
+@app.get("/api/download-range")
 @app.get("/api/download-range/{course}/{filename}")
-async def download_range(request: Request, course: str, filename: str, pages: str):
+async def download_range(request: Request, course: Optional[str] = None, filename: Optional[str] = None, pages: Optional[str] = None, token: Optional[str] = None):
+    if not course: course = request.query_params.get("course")
+    if not filename: filename = request.query_params.get("filename")
+    if not pages: pages = request.query_params.get("pages")
+    if not token: token = request.query_params.get("token")
+
     user = get_current_user(request)
+    if not user and token:
+        data = load_auth_data()
+        s_info = data.get("sessions", {}).get(token)
+        if s_info:
+            u = s_info if isinstance(s_info, str) else s_info.get("username")
+            if u in data.get("users", {}):
+                user = data["users"][u]
+
     if not user:
         raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
 
+    if not course or not filename or not pages:
+        raise HTTPException(status_code=400, detail="Eksik parametreler.")
+
     fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
     if not os.path.exists(fpath):
-        raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
+        raise HTTPException(status_code=404, detail=f"'{filename}' dosyası sunucuda bulunamadı.")
     
     reader = PdfReader(fpath)
     total_pages = len(reader.pages)
@@ -478,7 +534,7 @@ async def download_range(request: Request, course: str, filename: str, pages: st
     return StreamingResponse(
         output_stream,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{out_name}"'}
+        headers={"Content-Disposition": f'attachment; filename="{urllib.parse.quote(out_name)}"'}
     )
 
 if __name__ == "__main__":
