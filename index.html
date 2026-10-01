@@ -6,10 +6,12 @@
   <title>Ders Notları & PDF Portalı</title>
   <!-- Tailwind CSS -->
   <script src="https://cdn.tailwindcss.com"></script>
-  <!-- PDF.js from Cloudflare -->
+  <!-- PDF.js -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
-  <!-- pdf-lib for merging drawings and client-side extraction -->
+  <!-- pdf-lib -->
   <script src="https://unpkg.com/pdf-lib@1.17.9/dist/pdf-lib.min.js"></script>
+  <!-- Google Identity Services -->
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
   <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
   <style>
     body { font-family: 'Plus Jakarta Sans', sans-serif; }
@@ -22,7 +24,7 @@
 
   <!-- Header -->
   <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
-    <div class="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+    <div class="max-w-6xl mx-auto px-4 py-3.5 flex flex-col sm:flex-row items-center justify-between gap-4">
       <div class="flex items-center gap-3">
         <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-100">
           <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -31,15 +33,29 @@
         </div>
         <div>
           <h1 class="text-xl font-bold text-slate-900 tracking-tight">Ders PDF Portalı</h1>
-          <p class="text-xs text-slate-500">PDF Okuma, Çizim Yapma & Özel Sayfa İndirme</p>
+          <p class="text-xs text-slate-500">Ders Notları • Çizim & İndirme</p>
         </div>
       </div>
-      <button onclick="openUploadModal()" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm transition-all hover:shadow active:scale-95">
-        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
-        </svg>
-        Yeni PDF Yükle
-      </button>
+
+      <!-- User Auth & Action Buttons -->
+      <div class="flex items-center gap-2.5 w-full sm:w-auto justify-end">
+        <!-- Admin Upload Button (Hidden unless admin) -->
+        <button id="adminUploadBtn" onclick="openUploadModal()" class="hidden items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold px-3.5 py-2 rounded-xl shadow-sm transition-all hover:shadow active:scale-95">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path></svg>
+          Yeni PDF Yükle
+        </button>
+
+        <!-- User Profile Area -->
+        <div id="authArea" class="flex items-center gap-2">
+          <!-- Populated by JS -->
+          <button onclick="openAuthModal('login')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3.5 py-2 rounded-xl transition-all">
+            Giriş Yap
+          </button>
+          <button onclick="openAuthModal('register')" class="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-3.5 py-2 rounded-xl transition-all">
+            Kayıt Ol
+          </button>
+        </div>
+      </div>
     </div>
   </header>
 
@@ -49,7 +65,7 @@
     <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4">
       <div class="flex flex-col md:flex-row items-center justify-between gap-3">
         <div class="relative w-full md:w-96">
-          <input type="text" id="searchInput" oninput="renderFiles()" placeholder="Ders adı veya not ara..." 
+          <input type="text" id="searchInput" oninput="renderFiles()" placeholder="Ders adı veya konu ara..." 
             class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all">
           <svg class="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
@@ -58,7 +74,7 @@
         <div class="text-xs text-slate-500 flex items-center gap-2">
           <span id="fileCountBadge" class="font-medium bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">0 Not</span>
           <span>•</span>
-          <span class="text-emerald-600 font-medium">✏️ Canlı Çizim & Fosforlu Kalem Aktif</span>
+          <span id="roleBadge" class="text-indigo-600 font-medium">Ziyaretçi Modu</span>
         </div>
       </div>
       <div class="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar" id="categoryPills"></div>
@@ -74,10 +90,64 @@
           <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
         </svg>
       </div>
-      <h3 class="font-semibold text-slate-800">Henüz Not Bulunmuyor</h3>
-      <p class="text-sm text-slate-500 max-w-sm mx-auto">Yukarıdaki "Yeni PDF Yükle" butonuna tıklayarak ilk notunuzu ekleyebilirsiniz.</p>
+      <h3 class="font-semibold text-slate-800">Henüz Bu Kategoride PDF Yok</h3>
+      <p id="emptyStateDesc" class="text-sm text-slate-500 max-w-sm mx-auto">Yüklenen ders notları burada listelenecektir.</p>
     </div>
   </main>
+
+  <!-- ==================== AUTH MODAL (Login / Register / Google) ==================== -->
+  <div id="authModal" class="fixed inset-0 bg-slate-900/50 backdrop-blur-sm z-50 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-2xl max-w-sm w-full p-6 space-y-5 animate-in fade-in zoom-in duration-150">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex gap-4">
+          <button id="tabLogin" onclick="switchAuthTab('login')" class="text-sm font-bold text-indigo-600 border-b-2 border-indigo-600 pb-1">Giriş Yap</button>
+          <button id="tabRegister" onclick="switchAuthTab('register')" class="text-sm font-bold text-slate-400 hover:text-slate-600 pb-1">Kayıt Ol</button>
+        </div>
+        <button onclick="closeAuthModal()" class="text-slate-400 hover:text-slate-600 p-1">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+
+      <!-- Auth Form -->
+      <form id="authForm" onsubmit="handleAuthSubmit(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Kullanıcı Adı</label>
+          <input type="text" id="authUsername" required placeholder="kullanici_adi" 
+            class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1">Şifre</label>
+          <input type="password" id="authPassword" required placeholder="••••••••" 
+            class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
+        </div>
+        <div id="authError" class="text-xs text-rose-600 font-medium hidden"></div>
+
+        <button type="submit" id="authSubmitBtn" class="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold text-sm rounded-xl shadow-sm transition-all active:scale-98">
+          Giriş Yap
+        </button>
+      </form>
+
+      <!-- Google Sign-in Divider -->
+      <div class="relative flex py-1 items-center">
+        <div class="flex-grow border-t border-slate-200"></div>
+        <span class="flex-shrink mx-3 text-slate-400 text-xs">veya Google ile</span>
+        <div class="flex-grow border-t border-slate-200"></div>
+      </div>
+
+      <!-- Google Button -->
+      <div class="flex justify-center" id="googleBtnContainer">
+        <button onclick="handleGooglePrompt()" type="button" class="w-full flex items-center justify-center gap-2 border border-slate-200 hover:bg-slate-50 py-2.5 rounded-xl text-xs font-semibold text-slate-700 transition-all">
+          <svg class="w-4 h-4" viewBox="0 0 24 24">
+            <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+            <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+            <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.06H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.94l2.85-2.22.81-.63z"/>
+            <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.06l3.66 2.84c.87-2.6 3.3-4.52 6.16-4.52z"/>
+          </svg>
+          Google ile Giriş Yap
+        </button>
+      </div>
+    </div>
+  </div>
 
   <!-- ==================== PDF VIEWER & ANNOTATION MODAL ==================== -->
   <div id="viewerModal" class="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-50 hidden flex flex-col">
@@ -122,7 +192,6 @@
 
     <!-- Drawing Toolbar Ribbon -->
     <div class="bg-slate-800/90 border-b border-slate-700/80 px-4 py-2 flex flex-wrap items-center justify-center gap-3 text-white text-xs">
-      <!-- Tool Selection -->
       <div class="flex items-center gap-1 bg-slate-900/60 p-1 rounded-xl border border-slate-700">
         <button id="toolPen" onclick="selectTool('pen')" class="px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow">
           ✏️ Kalem
@@ -135,32 +204,28 @@
         </button>
       </div>
 
-      <!-- Color Palette -->
       <div class="flex items-center gap-1.5 bg-slate-900/60 px-2.5 py-1.5 rounded-xl border border-slate-700">
         <span class="text-slate-400 text-[11px] mr-1">Renk:</span>
-        <button onclick="setColor('#ef4444')" class="w-5 h-5 rounded-full bg-red-500 ring-2 ring-transparent focus:ring-white transition-all" title="Kırmızı"></button>
-        <button onclick="setColor('#3b82f6')" class="w-5 h-5 rounded-full bg-blue-500 ring-2 ring-transparent focus:ring-white transition-all" title="Mavi"></button>
-        <button onclick="setColor('#eab308')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-transparent focus:ring-white transition-all" title="Sarı"></button>
-        <button onclick="setColor('#10b981')" class="w-5 h-5 rounded-full bg-emerald-500 ring-2 ring-transparent focus:ring-white transition-all" title="Yeşil"></button>
-        <button onclick="setColor('#000000')" class="w-5 h-5 rounded-full bg-black ring-1 ring-slate-600 focus:ring-white transition-all" title="Siyah"></button>
+        <button onclick="setColor('#ef4444')" class="w-5 h-5 rounded-full bg-red-500 ring-2 ring-transparent focus:ring-white transition-all"></button>
+        <button onclick="setColor('#3b82f6')" class="w-5 h-5 rounded-full bg-blue-500 ring-2 ring-transparent focus:ring-white transition-all"></button>
+        <button onclick="setColor('#eab308')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-transparent focus:ring-white transition-all"></button>
+        <button onclick="setColor('#10b981')" class="w-5 h-5 rounded-full bg-emerald-500 ring-2 ring-transparent focus:ring-white transition-all"></button>
+        <button onclick="setColor('#000000')" class="w-5 h-5 rounded-full bg-black ring-1 ring-slate-600 focus:ring-white transition-all"></button>
         <input type="color" id="customColor" onchange="setColor(this.value)" value="#ef4444" class="w-6 h-6 rounded-full cursor-pointer bg-transparent border-0">
       </div>
 
-      <!-- Stroke Size -->
       <div class="flex items-center gap-1.5 bg-slate-900/60 px-2.5 py-1.5 rounded-xl border border-slate-700">
         <span class="text-slate-400 text-[11px]">Kalınlık:</span>
         <button onclick="setSize(2)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">İnce</button>
         <button onclick="setSize(5)" class="px-2 py-0.5 rounded bg-indigo-600 font-mono" id="sizeNormal">Orta</button>
         <button onclick="setSize(12)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">Kalın</button>
-        <button onclick="setSize(24)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">Geniş</button>
       </div>
 
-      <!-- Undo & Clear -->
       <div class="flex items-center gap-1">
-        <button onclick="undoStroke()" class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg flex items-center gap-1 transition-all" title="Son Çizgiyi Geri Al">
+        <button onclick="undoStroke()" class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg flex items-center gap-1 transition-all" title="Geri Al">
           ↩️ Geri Al
         </button>
-        <button onclick="clearCurrentPageDrawings()" class="px-2.5 py-1.5 bg-rose-900/40 hover:bg-rose-900/60 text-rose-300 rounded-lg flex items-center gap-1 transition-all" title="Bu Sayfadaki Çizimleri Temizle">
+        <button onclick="clearCurrentPageDrawings()" class="px-2.5 py-1.5 bg-rose-900/40 hover:bg-rose-900/60 text-rose-300 rounded-lg flex items-center gap-1 transition-all" title="Temizle">
           🗑️ Temizle
         </button>
       </div>
@@ -169,19 +234,17 @@
     <!-- Viewer Canvas Container -->
     <div id="viewerViewport" class="flex-1 overflow-auto p-4 flex items-center justify-center custom-scrollbar">
       <div id="canvasWrapper" class="relative shadow-2xl rounded-lg bg-white overflow-hidden">
-        <!-- Background PDF Canvas -->
         <canvas id="pdfCanvas" class="block"></canvas>
-        <!-- Overlay Drawing Canvas -->
         <canvas id="drawingCanvas" class="absolute inset-0 cursor-crosshair"></canvas>
       </div>
     </div>
   </div>
 
-  <!-- Upload Modal -->
+  <!-- Upload Modal (Only for Admin) -->
   <div id="uploadModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
     <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 space-y-5">
       <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-        <h3 class="font-bold text-slate-900 text-lg">Ders Notu Yükle</h3>
+        <h3 class="font-bold text-slate-900 text-lg">Admin • Ders Notu Yükle</h3>
         <button onclick="closeUploadModal()" class="text-slate-400 hover:text-slate-600 p-1">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
@@ -224,7 +287,6 @@
           <p class="font-semibold">💡 Nasıl Yazabilirsiniz?</p>
           <p>• Aralık için: <code class="bg-white px-1 py-0.5 rounded border border-indigo-200">1-5</code> (1'den 5'e kadar)</p>
           <p>• Tek sayfalar için: <code class="bg-white px-1 py-0.5 rounded border border-indigo-200">1, 4, 7</code></p>
-          <p>• Karışık: <code class="bg-white px-1 py-0.5 rounded border border-indigo-200">1-3, 6, 8-10</code></p>
         </div>
         <div>
           <div class="flex justify-between items-center mb-1">
@@ -245,33 +307,175 @@
   </div>
 
   <footer class="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-400">
-    <p>Ders Notları & PDF Portalı • Python & Canlı Çizim Desteği</p>
+    <p>Ders Notları & PDF Portalı • Güvenli Giriş & Admin Yönetimi</p>
   </footer>
 
   <script>
-    // PDF.js worker setup
     pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
 
+    let currentUser = { authenticated: false, username: null, role: 'guest' };
     let courses = ['Tümü'];
     let selectedCategory = 'Tümü';
     let files = [];
     let currentModalFile = null;
+    let authMode = 'login'; // 'login' or 'register'
 
-    // --- Viewer & Annotation State ---
+    // --- Viewer State ---
     let currentViewerFile = null;
     let pdfDoc = null;
     let currentPdfBytes = null;
     let currentPageNum = 1;
     let currentScale = 1.25;
-    let currentTool = 'pen'; // 'pen', 'highlighter', 'eraser'
+    let currentTool = 'pen';
     let currentColor = '#ef4444';
     let currentSize = 5;
     let isDrawing = false;
-    let currentStroke = [];
-    
-    // Key: pageNum (1-based), Value: Array of stroke objects
+    let currentStroke = null;
     let pageStrokes = {};
 
+    // --- Auth Checks ---
+    async function checkAuth() {
+      try {
+        const res = await fetch('/api/auth/me');
+        currentUser = await res.json();
+        updateAuthUI();
+      } catch (e) {
+        currentUser = { authenticated: false, username: null, role: 'guest' };
+        updateAuthUI();
+      }
+    }
+
+    function updateAuthUI() {
+      const authArea = document.getElementById('authArea');
+      const adminUploadBtn = document.getElementById('adminUploadBtn');
+      const roleBadge = document.getElementById('roleBadge');
+
+      if (currentUser.authenticated) {
+        const isAdmin = currentUser.role === 'admin';
+        roleBadge.textContent = isAdmin ? '👑 Admin Modu' : `👤 ${currentUser.username}`;
+        roleBadge.className = isAdmin ? 'text-amber-600 font-bold' : 'text-indigo-600 font-medium';
+
+        if (isAdmin) {
+          adminUploadBtn.classList.remove('hidden');
+          adminUploadBtn.classList.add('inline-flex');
+        } else {
+          adminUploadBtn.classList.add('hidden');
+          adminUploadBtn.classList.remove('inline-flex');
+        }
+
+        authArea.innerHTML = `
+          <div class="flex items-center gap-2">
+            <span class="text-xs font-semibold text-slate-700 bg-slate-100 px-2.5 py-1.5 rounded-xl border border-slate-200">
+              ${isAdmin ? '👑 ' : ''}${escapeHtml(currentUser.username)}
+            </span>
+            <button onclick="handleLogout()" class="text-xs text-slate-500 hover:text-rose-600 p-1.5 transition-all" title="Çıkış Yap">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1"></path></svg>
+            </button>
+          </div>
+        `;
+      } else {
+        roleBadge.textContent = 'Ziyaretçi Modu';
+        roleBadge.className = 'text-slate-400 font-medium';
+        adminUploadBtn.classList.add('hidden');
+        adminUploadBtn.classList.remove('inline-flex');
+
+        authArea.innerHTML = `
+          <button onclick="openAuthModal('login')" class="bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold px-3 py-2 rounded-xl transition-all">
+            Giriş Yap
+          </button>
+          <button onclick="openAuthModal('register')" class="bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold px-3 py-2 rounded-xl transition-all">
+            Kayıt Ol
+          </button>
+        `;
+      }
+
+      renderFiles();
+    }
+
+    function openAuthModal(mode) {
+      authMode = mode;
+      document.getElementById('authForm').reset();
+      document.getElementById('authError').classList.add('hidden');
+      switchAuthTab(mode);
+      document.getElementById('authModal').classList.remove('hidden');
+    }
+
+    function closeAuthModal() {
+      document.getElementById('authModal').classList.add('hidden');
+    }
+
+    function switchAuthTab(mode) {
+      authMode = mode;
+      const tabLogin = document.getElementById('tabLogin');
+      const tabRegister = document.getElementById('tabRegister');
+      const submitBtn = document.getElementById('authSubmitBtn');
+      document.getElementById('authError').classList.add('hidden');
+
+      if (mode === 'login') {
+        tabLogin.className = 'text-sm font-bold text-indigo-600 border-b-2 border-indigo-600 pb-1';
+        tabRegister.className = 'text-sm font-bold text-slate-400 hover:text-slate-600 pb-1';
+        submitBtn.textContent = 'Giriş Yap';
+      } else {
+        tabRegister.className = 'text-sm font-bold text-indigo-600 border-b-2 border-indigo-600 pb-1';
+        tabLogin.className = 'text-sm font-bold text-slate-400 hover:text-slate-600 pb-1';
+        submitBtn.textContent = 'Kayıt Ol';
+      }
+    }
+
+    async function handleAuthSubmit(e) {
+      e.preventDefault();
+      const username = document.getElementById('authUsername').value.trim();
+      const password = document.getElementById('authPassword').value;
+      const errorDiv = document.getElementById('authError');
+      const submitBtn = document.getElementById('authSubmitBtn');
+
+      errorDiv.classList.add('hidden');
+      submitBtn.disabled = true;
+      submitBtn.textContent = 'İşleniyor...';
+
+      const formData = new FormData();
+      formData.append('username', username);
+      formData.append('password', password);
+
+      const endpoint = authMode === 'login' ? '/api/auth/login' : '/api/auth/register';
+
+      try {
+        const res = await fetch(endpoint, { method: 'POST', body: formData });
+        const data = await res.json();
+        if (res.ok) {
+          if (authMode === 'register') {
+            alert('Kayıt başarılı! Şimdi giriş yapabilirsiniz.');
+            switchAuthTab('login');
+          } else {
+            closeAuthModal();
+            await checkAuth();
+          }
+        } else {
+          errorDiv.textContent = data.detail || 'Bir hata oluştu.';
+          errorDiv.classList.remove('hidden');
+        }
+      } catch (err) {
+        errorDiv.textContent = 'Sunucu bağlantı hatası: ' + err;
+        errorDiv.classList.remove('hidden');
+      } finally {
+        submitBtn.disabled = false;
+        submitBtn.textContent = authMode === 'login' ? 'Giriş Yap' : 'Kayıt Ol';
+      }
+    }
+
+    async function handleLogout() {
+      if (confirm('Çıkış yapmak istediğinize emin misiniz?')) {
+        await fetch('/api/auth/logout', { method: 'POST' });
+        await checkAuth();
+      }
+    }
+
+    // Google Sign-In prompt
+    function handleGooglePrompt() {
+      alert('Google ile Giriş yapabilmek için Google Cloud Console üzerinden ücretsiz bir "Client ID" tanımlanması gerekir. Şimdilik kullanıcı adı ve şifreyle doğrudan giriş yapabilir veya kayıt olabilirsiniz!');
+    }
+
+    // --- Data Fetching ---
     async function loadData() {
       const res = await fetch('/api/files');
       const data = await res.json();
@@ -314,6 +518,7 @@
       const grid = document.getElementById('fileGrid');
       const empty = document.getElementById('emptyState');
       const search = document.getElementById('searchInput').value.toLowerCase().trim();
+      const isAdmin = currentUser && currentUser.role === 'admin';
 
       const filtered = files.filter(item => {
         const matchCat = (selectedCategory === 'Tümü') || (item.course === selectedCategory);
@@ -333,9 +538,17 @@
       grid.innerHTML = filtered.map(item => `
         <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between group">
           <div class="space-y-3">
-            <span class="inline-block text-[11px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg">
-              ${escapeHtml(item.course)}
-            </span>
+            <div class="flex items-start justify-between gap-2">
+              <span class="inline-block text-[11px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg">
+                ${escapeHtml(item.course)}
+              </span>
+              ${isAdmin ? `
+                <button onclick="handleDeletePdf('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}')" title="Notu Sil (Admin)" 
+                  class="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
+                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+                </button>
+              ` : ''}
+            </div>
             <div>
               <h4 class="font-bold text-slate-900 text-base leading-snug line-clamp-2">${escapeHtml(item.title)}</h4>
               <div class="flex items-center gap-3 text-xs text-slate-400 mt-2">
@@ -346,16 +559,13 @@
             </div>
           </div>
 
-          <!-- Action Buttons -->
           <div class="pt-5 mt-4 border-t border-slate-100 space-y-2">
-            <!-- Open Viewer Button -->
             <button onclick="openViewer('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}', '${escapeHtml(item.title)}')"
               class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm active:scale-98">
               <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
               İncele & Çizim Yap
             </button>
 
-            <!-- Download Buttons -->
             <div class="flex items-center gap-2">
               <a href="/api/download/${encodeURIComponent(item.course)}/${encodeURIComponent(item.filename)}" 
                 class="flex-1 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-3 rounded-xl transition-all text-center">
@@ -371,7 +581,23 @@
       `).join('');
     }
 
-    // --- PDF Viewer & Drawing Logic ---
+    async function handleDeletePdf(course, filename) {
+      if (confirm(`"${filename}" dosyasını silmek istediğinize emin misiniz?`)) {
+        try {
+          const res = await fetch(`/api/delete/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
+          if (res.ok) {
+            await loadData();
+          } else {
+            const data = await res.json();
+            alert('Silme başarısız: ' + (data.detail || 'Yetkisiz'));
+          }
+        } catch (e) {
+          alert('Hata: ' + e);
+        }
+      }
+    }
+
+    // --- PDF Viewer & Drawing ---
     async function openViewer(course, filename, title) {
       currentViewerFile = { course, filename, title };
       document.getElementById('viewerTitle').textContent = title;
@@ -434,46 +660,16 @@
       redrawCurrentPageStrokes();
     }
 
-    function prevPage() {
-      if (currentPageNum > 1) {
-        renderViewerPage(currentPageNum - 1);
-      }
-    }
+    function prevPage() { if (currentPageNum > 1) renderViewerPage(currentPageNum - 1); }
+    function nextPage() { if (pdfDoc && currentPageNum < pdfDoc.numPages) renderViewerPage(currentPageNum + 1); }
+    function zoomIn() { currentScale += 0.2; document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%'; renderViewerPage(currentPageNum); }
+    function zoomOut() { if (currentScale > 0.6) { currentScale -= 0.2; document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%'; renderViewerPage(currentPageNum); } }
 
-    function nextPage() {
-      if (pdfDoc && currentPageNum < pdfDoc.numPages) {
-        renderViewerPage(currentPageNum + 1);
-      }
-    }
-
-    function zoomIn() {
-      currentScale += 0.2;
-      document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%';
-      renderViewerPage(currentPageNum);
-    }
-
-    function zoomOut() {
-      if (currentScale > 0.6) {
-        currentScale -= 0.2;
-        document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%';
-        renderViewerPage(currentPageNum);
-      }
-    }
-
-    // --- Drawing Tool Settings ---
     function selectTool(tool) {
       currentTool = tool;
-      document.getElementById('toolPen').className = (tool === 'pen') 
-        ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' 
-        : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
-      
-      document.getElementById('toolHighlighter').className = (tool === 'highlighter') 
-        ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' 
-        : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
-
-      document.getElementById('toolEraser').className = (tool === 'eraser') 
-        ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' 
-        : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
+      document.getElementById('toolPen').className = (tool === 'pen') ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
+      document.getElementById('toolHighlighter').className = (tool === 'highlighter') ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
+      document.getElementById('toolEraser').className = (tool === 'eraser') ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
     }
 
     function setColor(color) {
@@ -481,15 +677,11 @@
       document.getElementById('customColor').value = color;
       if (currentTool === 'eraser') selectTool('pen');
     }
-
-    function setSize(sz) {
-      currentSize = sz;
-    }
+    function setSize(sz) { currentSize = sz; }
 
     function setupDrawingEvents() {
       const canvas = document.getElementById('drawingCanvas');
       const ctx = canvas.getContext('2d');
-
       const getPos = (e) => {
         const rect = canvas.getBoundingClientRect();
         return {
@@ -518,9 +710,7 @@
 
       const stopDrawing = () => {
         if (isDrawing && currentStroke && currentStroke.points.length > 0) {
-          if (!pageStrokes[currentPageNum]) {
-            pageStrokes[currentPageNum] = [];
-          }
+          if (!pageStrokes[currentPageNum]) pageStrokes[currentPageNum] = [];
           pageStrokes[currentPageNum].push(currentStroke);
           redrawCurrentPageStrokes();
         }
@@ -537,11 +727,7 @@
       ctx.save();
       ctx.beginPath();
       ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
-
-      for (let i = 1; i < stroke.points.length; i++) {
-        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
-      }
-
+      for (let i = 1; i < stroke.points.length; i++) ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
 
@@ -559,7 +745,6 @@
         ctx.lineWidth = stroke.size;
         ctx.strokeStyle = stroke.color;
       }
-
       ctx.stroke();
       ctx.restore();
     }
@@ -568,7 +753,6 @@
       const canvas = document.getElementById('drawingCanvas');
       const ctx = canvas.getContext('2d');
       ctx.clearRect(0, 0, canvas.width, canvas.height);
-
       const strokes = pageStrokes[currentPageNum] || [];
       strokes.forEach(s => drawSingleStroke(ctx, s));
     }
@@ -581,35 +765,25 @@
     }
 
     function clearCurrentPageDrawings() {
-      if (confirm('Bu sayfadaki tüm çizimleri silmek istiyor musunuz?')) {
+      if (confirm('Bu sayfadaki çizimleri temizlemek istiyor musunuz?')) {
         pageStrokes[currentPageNum] = [];
         redrawCurrentPageStrokes();
       }
     }
 
-    // --- Save & Download Annotated PDF ---
     async function downloadAnnotatedPDF() {
       if (!currentViewerFile || !currentPdfBytes) return;
       const btn = document.getElementById('saveAnnotatedBtn');
       const btnText = document.getElementById('saveAnnotatedText');
-
       try {
-        btn.disabled = true;
-        btnText.textContent = 'Çizimler Kaydediliyor...';
-
-        // Load original PDF with PDFLib
+        btn.disabled = true; btnText.textContent = 'Kaydediliyor...';
         const pdfDocToExport = await PDFLib.PDFDocument.load(currentPdfBytes);
         const totalPages = pdfDocToExport.getPageCount();
-
-        // Check if any drawings exist
         const pagesWithDrawings = Object.keys(pageStrokes).filter(p => pageStrokes[p] && pageStrokes[p].length > 0);
-        
         if (pagesWithDrawings.length === 0) {
-          alert('Henüz hiçbir sayfaya çizim yapmadınız.');
-          return;
+          alert('Henüz çizim yapmadınız.'); return;
         }
 
-        // Create temporary canvas to rasterize drawings for each page
         const tempCanvas = document.createElement('canvas');
         const tempCtx = tempCanvas.getContext('2d');
 
@@ -619,81 +793,60 @@
 
           const targetPage = pdfDocToExport.getPage(pIndex);
           const { width, height } = targetPage.getSize();
-
-          // Set temp canvas to match PDF page dimensions in points
           tempCanvas.width = width * 2;
           tempCanvas.height = height * 2;
           tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
           tempCtx.scale(2, 2);
 
-          // Get original render dimensions to scale stroke coordinates properly
           const originalPage = await pdfDoc.getPage(parseInt(pageNumStr, 10));
           const originalViewport = originalPage.getViewport({ scale: currentScale });
-
           const scaleX = width / originalViewport.width;
           const scaleY = height / originalViewport.height;
 
-          // Draw scaled strokes onto tempCanvas
           const strokes = pageStrokes[pageNumStr];
           strokes.forEach(stroke => {
-            const scaledStroke = {
+            const scaled = {
               tool: stroke.tool,
               color: stroke.color,
               size: stroke.size * scaleX,
               points: stroke.points.map(pt => ({ x: pt.x * scaleX, y: pt.y * scaleY }))
             };
-            drawSingleStroke(tempCtx, scaledStroke);
+            drawSingleStroke(tempCtx, scaled);
           });
 
-          // Convert drawing canvas to PNG
           const pngDataUrl = tempCanvas.toDataURL('image/png');
-          const pngImageBytes = await fetch(pngDataUrl).then(res => res.arrayBuffer());
-          const embeddedPng = await pdfDocToExport.embedPng(pngImageBytes);
-
-          // Draw PNG image over the PDF page
-          targetPage.drawImage(embeddedPng, {
-            x: 0,
-            y: 0,
-            width: width,
-            height: height
-          });
+          const pngBytes = await fetch(pngDataUrl).then(r => r.arrayBuffer());
+          const embedded = await pdfDocToExport.embedPng(pngBytes);
+          targetPage.drawImage(embedded, { x: 0, y: 0, width, height });
         }
 
-        const annotatedPdfBytes = await pdfDocToExport.save();
-        const blob = new Blob([annotatedPdfBytes], { type: 'application/pdf' });
+        const bytes = await pdfDocToExport.save();
+        const blob = new Blob([bytes], { type: 'application/pdf' });
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url;
-        a.download = `${currentViewerFile.title}_Cizimli.pdf`;
-        document.body.appendChild(a);
-        a.click();
-        document.body.removeChild(a);
+        a.href = url; a.download = `${currentViewerFile.title}_Cizimli.pdf`;
+        document.body.appendChild(a); a.click(); document.body.removeChild(a);
         setTimeout(() => URL.revokeObjectURL(url), 1000);
-
-      } catch (err) {
-        alert('PDF kaydedilirken hata: ' + err.message);
+      } catch (e) {
+        alert('Kaydetme hatası: ' + e.message);
       } finally {
-        btn.disabled = false;
-        btnText.textContent = 'Çizimli İndir';
+        btn.disabled = false; btnText.textContent = 'Çizimli İndir';
       }
     }
 
-    // --- Standard Helpers ---
+    // --- Admin Upload ---
     function openUploadModal() {
       document.getElementById('uploadForm').reset();
       document.getElementById('uploadModal').classList.remove('hidden');
     }
-    function closeUploadModal() {
-      document.getElementById('uploadModal').classList.add('hidden');
-    }
+    function closeUploadModal() { document.getElementById('uploadModal').classList.add('hidden'); }
 
     function promptNewCourse() {
       const name = prompt('Yeni ders adı:');
       if (name && name.trim()) {
         const tr = name.trim();
         if (!courses.includes(tr)) {
-          courses.push(tr);
-          renderCategories();
+          courses.push(tr); renderCategories();
           document.getElementById('courseSelect').value = tr;
         }
       }
@@ -710,8 +863,7 @@
       formData.append('course', course);
 
       const btn = document.getElementById('uploadSubmitBtn');
-      btn.disabled = true;
-      btn.textContent = 'Yükleniyor...';
+      btn.disabled = true; btn.textContent = 'Yükleniyor...';
 
       try {
         const res = await fetch('/api/upload', { method: 'POST', body: formData });
@@ -719,16 +871,17 @@
           closeUploadModal();
           await loadData();
         } else {
-          alert('Yükleme hatası!');
+          const data = await res.json();
+          alert('Yükleme hatası: ' + (data.detail || 'Yetkisiz'));
         }
       } catch (err) {
         alert('Sunucu hatası: ' + err);
       } finally {
-        btn.disabled = false;
-        btn.textContent = 'Yükle';
+        btn.disabled = false; btn.textContent = 'Yükle';
       }
     }
 
+    // --- Range Download ---
     function openRangeModal(course, filename, title, maxPages) {
       currentModalFile = { course, filename, title, maxPages };
       document.getElementById('rangeModalSub').textContent = title;
@@ -736,10 +889,7 @@
       document.getElementById('pageRangeInput').value = `1-${Math.min(5, maxPages)}`;
       document.getElementById('rangeModal').classList.remove('hidden');
     }
-    function closeRangeModal() {
-      document.getElementById('rangeModal').classList.add('hidden');
-      currentModalFile = null;
-    }
+    function closeRangeModal() { document.getElementById('rangeModal').classList.add('hidden'); currentModalFile = null; }
 
     function executeRangeDownload() {
       if (!currentModalFile) return;
@@ -757,7 +907,10 @@
     }
     function escapeHtml(s) { return (s || '').replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[m])); }
 
-    window.addEventListener('DOMContentLoaded', loadData);
+    window.addEventListener('DOMContentLoaded', async () => {
+      await checkAuth();
+      await loadData();
+    });
   </script>
 </body>
 </html>

@@ -1,19 +1,69 @@
 import os
 import io
 import re
-from typing import List
-from fastapi import FastAPI, Form, UploadFile, File, HTTPException
+import json
+import base64
+import secrets
+import hashlib
+from typing import List, Optional
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request, Response, Depends
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from pypdf import PdfReader, PdfWriter
 
 app = FastAPI(title="Ders Notları & PDF Portalı")
 
 BASE_UPLOAD_DIR = "uploads"
+AUTH_FILE = "users.json"
 os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
 
 DEFAULT_COURSES = ["Kadın Doğum Hemşireliği", "İç Hastalıkları", "Cerrahi Hastalıkları", "Sağlık Tanılaması", "Genel"]
 for course in DEFAULT_COURSES:
     os.makedirs(os.path.join(BASE_UPLOAD_DIR, course), exist_ok=True)
+
+# --- Authentication Helpers ---
+def hash_password(password: str, salt: str = None) -> tuple:
+    if not salt:
+        salt = secrets.token_hex(16)
+    hashed = hashlib.sha256((password + salt).encode('utf-8')).hexdigest()
+    return hashed, salt
+
+def load_auth_data():
+    if not os.path.exists(AUTH_FILE):
+        # Default admin account
+        admin_hash, admin_salt = hash_password("admin123")
+        data = {
+            "users": {
+                "admin": {
+                    "username": "admin",
+                    "password_hash": admin_hash,
+                    "salt": admin_salt,
+                    "role": "admin"
+                }
+            },
+            "sessions": {}
+        }
+        with open(AUTH_FILE, "w", encoding="utf-8") as f:
+            json.dump(data, f, indent=2)
+        return data
+    try:
+        with open(AUTH_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return {"users": {}, "sessions": {}}
+
+def save_auth_data(data):
+    with open(AUTH_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2)
+
+def get_current_user(request: Request) -> Optional[dict]:
+    token = request.cookies.get("session_token")
+    if not token:
+        return None
+    data = load_auth_data()
+    username = data.get("sessions", {}).get(token)
+    if username and username in data.get("users", {}):
+        return data["users"][username]
+    return None
 
 def parse_range(range_str: str, max_pages: int) -> List[int]:
     pages = set()
@@ -36,6 +86,7 @@ def parse_range(range_str: str, max_pages: int) -> List[int]:
                 pages.add(p - 1)
     return sorted(list(pages))
 
+# --- Public & Auth Routes ---
 @app.get("/", response_class=HTMLResponse)
 async def home():
     template_path = os.path.join("templates", "index.html")
@@ -44,6 +95,108 @@ async def home():
     with open(template_path, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
+@app.get("/api/auth/me")
+async def auth_me(request: Request):
+    user = get_current_user(request)
+    if user:
+        return {
+            "authenticated": True,
+            "username": user["username"],
+            "role": user.get("role", "user")
+        }
+    return {"authenticated": False, "username": None, "role": "guest"}
+
+@app.post("/api/auth/register")
+async def register(username: str = Form(...), password: str = Form(...)):
+    username = username.strip().lower()
+    if not username or not password or len(password) < 4:
+        raise HTTPException(status_code=400, detail="Kullanıcı adı ve en az 4 karakterli şifre girin.")
+    
+    data = load_auth_data()
+    if username in data["users"]:
+        raise HTTPException(status_code=400, detail="Bu kullanıcı adı zaten alınmış.")
+    
+    h, s = hash_password(password)
+    data["users"][username] = {
+        "username": username,
+        "password_hash": h,
+        "salt": s,
+        "role": "user"
+    }
+    save_auth_data(data)
+    return {"status": "success", "message": "Kayıt başarılı! Şimdi giriş yapabilirsiniz."}
+
+@app.post("/api/auth/login")
+async def login(response: Response, username: str = Form(...), password: str = Form(...)):
+    username = username.strip().lower()
+    data = load_auth_data()
+    user = data.get("users", {}).get(username)
+    if not user:
+        raise HTTPException(status_code=401, detail="Geçersiz kullanıcı adı veya şifre.")
+    
+    expected_hash, _ = hash_password(password, user["salt"])
+    if expected_hash != user["password_hash"]:
+        raise HTTPException(status_code=401, detail="Geçersiz kullanıcı adı veya şifre.")
+    
+    token = secrets.token_hex(24)
+    data["sessions"][token] = username
+    save_auth_data(data)
+    
+    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400*30, samesite="lax")
+    return {"status": "success", "username": username, "role": user.get("role", "user")}
+
+@app.post("/api/auth/logout")
+async def logout(request: Request, response: Response):
+    token = request.cookies.get("session_token")
+    if token:
+        data = load_auth_data()
+        if token in data.get("sessions", {}):
+            del data["sessions"][token]
+            save_auth_data(data)
+    response.delete_cookie(key="session_token")
+    return {"status": "success"}
+
+@app.post("/api/auth/google")
+async def google_login(response: Response, credential: str = Form(...)):
+    try:
+        # Decode JWT payload (middle segment)
+        parts = credential.split(".")
+        if len(parts) != 3:
+            raise ValueError("Geçersiz token formatı")
+        
+        # Add padding if needed
+        payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
+        payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
+        payload = json.loads(payload_json)
+        
+        email = payload.get("email", "").lower()
+        name = payload.get("name", email.split("@")[0])
+        
+        if not email:
+            raise HTTPException(status_code=400, detail="Google e-posta bilgisi alınamadı.")
+            
+        data = load_auth_data()
+        username = email.split("@")[0]
+        
+        # If user doesn't exist, create one with role 'user'
+        if username not in data["users"]:
+            data["users"][username] = {
+                "username": username,
+                "email": email,
+                "role": "user",
+                "auth_provider": "google"
+            }
+            
+        token = secrets.token_hex(24)
+        data["sessions"][token] = username
+        save_auth_data(data)
+        
+        response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400*30, samesite="lax")
+        return {"status": "success", "username": username, "role": data["users"][username].get("role", "user")}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail="Google girişi doğrulanamadı: " + str(e))
+
+# --- File Operations ---
 @app.get("/api/files")
 async def list_files():
     data = []
@@ -71,7 +224,11 @@ async def list_files():
     return {"courses": courses, "files": data}
 
 @app.post("/api/upload")
-async def upload_pdf(course: str = Form(...), file: UploadFile = File(...)):
+async def upload_pdf(request: Request, course: str = Form(...), file: UploadFile = File(...)):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin PDF yükleyebilir.")
+        
     if not file.filename.lower().endswith(".pdf"):
         raise HTTPException(status_code=400, detail="Sadece PDF dosyaları yüklenebilir.")
     
@@ -86,6 +243,18 @@ async def upload_pdf(course: str = Form(...), file: UploadFile = File(...)):
         f.write(content)
         
     return JSONResponse({"status": "success", "message": "Dosya başarıyla yüklendi."})
+
+@app.delete("/api/delete/{course}/{filename}")
+async def delete_pdf(request: Request, course: str, filename: str):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin silebilir.")
+        
+    fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
+    if os.path.exists(fpath):
+        os.remove(fpath)
+        return {"status": "success", "message": "Dosya silindi."}
+    raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
 
 @app.get("/api/view/{course}/{filename}")
 async def view_pdf(course: str, filename: str):
