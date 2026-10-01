@@ -2,9 +2,11 @@ import os
 import io
 import re
 import json
+import time
 import base64
 import secrets
 import hashlib
+import urllib.request
 from typing import List, Optional
 from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
@@ -14,6 +16,7 @@ app = FastAPI(title="Ders Notları & PDF Portalı")
 
 BASE_UPLOAD_DIR = "uploads"
 AUTH_FILE = "users.json"
+SESSION_TIMEOUT_SECONDS = 24 * 3600  # 24 saatlik aktiflik süresi
 os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
 
 DEFAULT_COURSES = ["Kadın Doğum Hemşireliği", "İç Hastalıkları", "Cerrahi Hastalıkları", "Sağlık Tanılaması", "Genel"]
@@ -57,9 +60,38 @@ def save_auth_data(data):
 def get_current_user(request: Request) -> Optional[dict]:
     token = request.cookies.get("session_token")
     if not token:
+        auth_header = request.headers.get("authorization")
+        if auth_header and auth_header.startswith("Bearer "):
+            token = auth_header.split(" ")[1]
+
+    if not token:
         return None
+
     data = load_auth_data()
-    username = data.get("sessions", {}).get(token)
+    session_info = data.get("sessions", {}).get(token)
+    if not session_info:
+        return None
+
+    if isinstance(session_info, str):
+        username = session_info
+        last_active = time.time()
+        data["sessions"][token] = {"username": username, "last_active": last_active}
+        save_auth_data(data)
+    else:
+        username = session_info.get("username")
+        last_active = session_info.get("last_active", 0)
+
+    now = time.time()
+    # 24 saat içinde tekrar girmediyse oturumu sonlandır
+    if now - last_active > SESSION_TIMEOUT_SECONDS:
+        del data["sessions"][token]
+        save_auth_data(data)
+        return None
+
+    # 24 saat içinde tekrar girdiyse süreyi 24 saat daha uzat (sliding expiration)
+    data["sessions"][token]["last_active"] = now
+    save_auth_data(data)
+
     if username and username in data.get("users", {}):
         return data["users"][username]
     return None
@@ -85,7 +117,7 @@ def parse_range(range_str: str, max_pages: int) -> List[int]:
                 pages.add(p - 1)
     return sorted(list(pages))
 
-# --- Public & Auth Routes ---
+# --- Public & Config Routes ---
 @app.get("/", response_class=HTMLResponse)
 async def home():
     template_path = os.path.join("templates", "index.html")
@@ -93,7 +125,6 @@ async def home():
         template_path = "index.html"
     with open(template_path, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
-
 
 @app.get("/api/config")
 async def get_config():
@@ -130,11 +161,11 @@ async def register(response: Response, username: str = Form(...), password: str 
     }
     
     token = secrets.token_hex(24)
-    data["sessions"][token] = username
+    data["sessions"][token] = {"username": username, "last_active": time.time()}
     save_auth_data(data)
     
-    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400*30, samesite="lax")
-    return {"status": "success", "username": username, "role": "user"}
+    response.set_cookie(key="session_token", value=token, httponly=True, max_age=SESSION_TIMEOUT_SECONDS, samesite="lax")
+    return {"status": "success", "username": username, "role": "user", "token": token}
 
 @app.post("/api/auth/login")
 async def login(response: Response, username: str = Form(...), password: str = Form(...)):
@@ -149,11 +180,11 @@ async def login(response: Response, username: str = Form(...), password: str = F
         raise HTTPException(status_code=401, detail="Geçersiz kullanıcı adı veya şifre.")
     
     token = secrets.token_hex(24)
-    data["sessions"][token] = username
+    data["sessions"][token] = {"username": username, "last_active": time.time()}
     save_auth_data(data)
     
-    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400*30, samesite="lax")
-    return {"status": "success", "username": username, "role": user.get("role", "user")}
+    response.set_cookie(key="session_token", value=token, httponly=True, max_age=SESSION_TIMEOUT_SECONDS, samesite="lax")
+    return {"status": "success", "username": username, "role": user.get("role", "user"), "token": token}
 
 @app.post("/api/auth/logout")
 async def logout(request: Request, response: Response):
@@ -193,15 +224,15 @@ async def google_login(response: Response, credential: str = Form(...)):
             }
             
         token = secrets.token_hex(24)
-        data["sessions"][token] = username
+        data["sessions"][token] = {"username": username, "last_active": time.time()}
         save_auth_data(data)
         
-        response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400*30, samesite="lax")
-        return {"status": "success", "username": username, "role": data["users"][username].get("role", "user")}
+        response.set_cookie(key="session_token", value=token, httponly=True, max_age=SESSION_TIMEOUT_SECONDS, samesite="lax")
+        return {"status": "success", "username": username, "role": data["users"][username].get("role", "user"), "token": token}
     except Exception as e:
         raise HTTPException(status_code=400, detail="Google girişi doğrulanamadı: " + str(e))
 
-# --- Protected Content Routes ---
+# --- File Operations ---
 @app.get("/api/files")
 async def list_files(request: Request):
     user = get_current_user(request)
@@ -252,6 +283,69 @@ async def upload_pdf(request: Request, course: str = Form(...), file: UploadFile
         f.write(content)
         
     return JSONResponse({"status": "success", "message": "Dosya başarıyla yüklendi."})
+
+@app.post("/api/upload-drive")
+async def upload_drive_pdf(request: Request, course: str = Form(...), drive_url: str = Form(...), custom_title: Optional[str] = Form(None)):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin PDF yükleyebilir.")
+
+    m = re.search(r'/d/([a-zA-Z0-9_-]+)', drive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', drive_url)
+    if m:
+        file_id = m.group(1)
+    elif len(drive_url.strip()) > 20 and ' ' not in drive_url.strip():
+        file_id = drive_url.strip()
+    else:
+        raise HTTPException(status_code=400, detail="Geçersiz Google Drive bağlantısı.")
+
+    c_path = os.path.join(BASE_UPLOAD_DIR, course)
+    os.makedirs(c_path, exist_ok=True)
+
+    urls_to_try = [
+        f"https://drive.usercontent.google.com/download?id={file_id}&export=download&authuser=0",
+        f"https://drive.google.com/uc?export=download&id={file_id}"
+    ]
+
+    pdf_bytes = None
+    content_disp = ""
+
+    for u in urls_to_try:
+        try:
+            req = urllib.request.Request(
+                u,
+                headers={'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'}
+            )
+            with urllib.request.urlopen(req, timeout=30) as resp:
+                content_disp = resp.headers.get("Content-Disposition", "")
+                pdf_bytes = resp.read()
+                if pdf_bytes.startswith(b"%PDF"):
+                    break
+        except Exception:
+            continue
+
+    if not pdf_bytes or not pdf_bytes.startswith(b"%PDF"):
+        raise HTTPException(
+            status_code=400, 
+            detail="Dosya indirilemedi veya geçerli bir PDF değil. Lütfen dosyanın Google Drive'da 'Bağlantıya sahip olan herkes görüntüleyebilir' olarak paylaşıldığından emin olun."
+        )
+
+    if custom_title and custom_title.strip():
+        fname = custom_title.strip()
+        if not fname.lower().endswith(".pdf"):
+            fname += ".pdf"
+    elif "filename=" in content_disp:
+        m_name = re.search(r'filename="?([^";]+)"?', content_disp)
+        fname = m_name.group(1) if m_name else f"Drive_Notu_{file_id[:8]}.pdf"
+    else:
+        fname = f"Drive_Notu_{file_id[:8]}.pdf"
+
+    safe_name = re.sub(r'[^a-zA-Z0-9_\-\.ğüşıöçĞÜŞİÖÇ ]', '', fname)
+    dest_path = os.path.join(c_path, safe_name)
+
+    with open(dest_path, "wb") as f:
+        f.write(pdf_bytes)
+
+    return JSONResponse({"status": "success", "message": f"'{safe_name}' başarıyla Google Drive'dan aktarıldı."})
 
 @app.delete("/api/delete/{course}/{filename}")
 async def delete_pdf(request: Request, course: str, filename: str):

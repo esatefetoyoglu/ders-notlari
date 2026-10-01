@@ -261,31 +261,76 @@
     </div>
   </div>
 
-  <!-- Upload Modal (Only for Admin) -->
+  <!-- Upload Modal (Only for Admin - File or Drive) -->
   <div id="uploadModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
-    <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 space-y-5">
+    <div class="bg-white rounded-3xl border border-slate-200 shadow-2xl max-w-lg w-full p-6 space-y-5 animate-in fade-in zoom-in duration-150">
       <div class="flex items-center justify-between border-b border-slate-100 pb-3">
-        <h3 class="font-bold text-slate-900 text-lg">Admin • Ders Notu Yükle</h3>
+        <h3 class="font-bold text-slate-900 text-lg flex items-center gap-2">
+          <span>👑 Admin</span>
+          <span class="text-xs font-medium text-slate-400">• Ders Notu Ekle</span>
+        </h3>
         <button onclick="closeUploadModal()" class="text-slate-400 hover:text-slate-600 p-1">
           <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
         </button>
       </div>
-      <form id="uploadForm" onsubmit="handleUpload(event)" class="space-y-4">
+
+      <!-- Upload Source Tabs -->
+      <div class="flex bg-slate-100 p-1 rounded-xl">
+        <button id="tabUploadDrive" onclick="switchUploadMode('drive')" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all bg-white text-indigo-600 shadow-sm flex items-center justify-center gap-1.5">
+          <svg class="w-4 h-4 text-indigo-600" viewBox="0 0 24 24" fill="currentColor"><path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM14 13v4h-4v-4H7l5-5 5 5h-3z"/></svg>
+          Google Drive Linki
+        </button>
+        <button id="tabUploadLocal" onclick="switchUploadMode('local')" class="flex-1 py-2 text-xs font-bold rounded-lg transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"></path></svg>
+          Bilgisayardan Dosya
+        </button>
+      </div>
+
+      <!-- Drive Upload Form -->
+      <form id="driveUploadForm" onsubmit="handleDriveUpload(event)" class="space-y-4">
         <div>
-          <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">PDF Dosyası</label>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Google Drive Dosya Linki</label>
+          <input type="url" id="driveUrlInput" required placeholder="https://drive.google.com/file/d/.../view" 
+            class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
+          <p class="text-[11px] text-slate-400 mt-1">💡 Dosyanın Google Drive'da <b>"Bağlantıya sahip olan herkes"</b> erişebilir olduğundan emin olun.</p>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Ders / Kategori</label>
+          <div class="flex gap-2">
+            <select id="driveCourseSelect" class="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"></select>
+            <button type="button" onclick="promptNewCourse()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium">+ Yeni Ders</button>
+          </div>
+        </div>
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Not Başlığı (İsteğe bağlı)</label>
+          <input type="text" id="driveTitleInput" placeholder="Örn: Kadın Doğum • 1. Hafta Özeti (Boşsa Drive dosya adı kullanılır)" 
+            class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
+        </div>
+        <div class="flex justify-end gap-3 pt-3 border-t border-slate-100">
+          <button type="button" onclick="closeUploadModal()" class="px-4 py-2 text-sm text-slate-600 font-medium">İptal</button>
+          <button type="submit" id="driveSubmitBtn" class="px-5 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm flex items-center gap-2">
+            Drive'dan Aktar
+          </button>
+        </div>
+      </form>
+
+      <!-- Local File Upload Form -->
+      <form id="localUploadForm" onsubmit="handleUpload(event)" class="space-y-4 hidden">
+        <div>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">PDF Dosyası Seç</label>
           <input type="file" id="pdfFileInput" accept="application/pdf" required 
             class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer">
         </div>
         <div>
-          <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Ders / Kategori</label>
+          <label class="block text-xs font-bold text-slate-700 uppercase tracking-wider mb-1.5">Ders / Kategori</label>
           <div class="flex gap-2">
-            <select id="courseSelect" class="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"></select>
+            <select id="localCourseSelect" class="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"></select>
             <button type="button" onclick="promptNewCourse()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium">+ Yeni Ders</button>
           </div>
         </div>
         <div class="flex justify-end gap-3 pt-3 border-t border-slate-100">
           <button type="button" onclick="closeUploadModal()" class="px-4 py-2 text-sm text-slate-600 font-medium">İptal</button>
-          <button type="submit" id="uploadSubmitBtn" class="px-5 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm">Yükle</button>
+          <button type="submit" id="uploadSubmitBtn" class="px-5 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm">Dosyayı Yükle</button>
         </div>
       </form>
     </div>
@@ -353,7 +398,9 @@
     // --- Authentication & Gate Handling ---
     async function checkAuth() {
       try {
-        const res = await fetch('/api/auth/me');
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/auth/me', { headers });
         currentUser = await res.json();
       } catch (e) {
         currentUser = { authenticated: false, username: null, role: 'guest' };
@@ -424,6 +471,7 @@
         const res = await fetch(endpoint, { method: 'POST', body: formData });
         const data = await res.json();
         if (res.ok) {
+          if (data.token) localStorage.setItem('session_token', data.token);
           await checkAuth();
         } else {
           errorDiv.textContent = data.detail || 'İşlem başarısız oldu.';
@@ -440,6 +488,7 @@
 
     async function handleLogout() {
       if (confirm('Çıkış yapmak istediğinize emin misiniz?')) {
+        localStorage.removeItem('session_token');
         await fetch('/api/auth/logout', { method: 'POST' });
         currentUser = { authenticated: false, username: null, role: 'guest' };
         applyAuthState();
@@ -487,6 +536,7 @@
         const res = await fetch('/api/auth/google', { method: 'POST', body: formData });
         const data = await res.json();
         if (res.ok) {
+          if (data.token) localStorage.setItem('session_token', data.token);
           await checkAuth();
         } else {
           alert('Google girişi başarısız: ' + (data.detail || ''));
@@ -503,7 +553,9 @@
     // --- Data Fetching ---
     async function loadData() {
       try {
-        const res = await fetch('/api/files');
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/files', { headers });
         if (!res.ok) return;
         const data = await res.json();
         courses = ['Tümü', ...data.courses];
@@ -513,6 +565,21 @@
       } catch (e) {
         console.error(e);
       }
+    }
+
+    
+    function populateUploadSelects() {
+      const s1 = document.getElementById('driveCourseSelect');
+      const s2 = document.getElementById('localCourseSelect');
+      if (!s1 || !s2) return;
+      s1.innerHTML = '';
+      s2.innerHTML = '';
+      courses.forEach(cat => {
+        if (cat !== 'Tümü') {
+          const opt1 = document.createElement('option'); opt1.value = cat; opt1.textContent = cat; s1.appendChild(opt1);
+          const opt2 = document.createElement('option'); opt2.value = cat; opt2.textContent = cat; s2.appendChild(opt2);
+        }
+      });
     }
 
     function renderCategories() {
@@ -534,6 +601,7 @@
           renderFiles();
         };
         container.appendChild(btn);
+      populateUploadSelects();
 
         if (cat !== 'Tümü') {
           const opt = document.createElement('option');
@@ -865,7 +933,68 @@
     }
 
     // --- Admin Upload ---
+    
+    let uploadMode = 'drive';
+
+    function switchUploadMode(mode) {
+      uploadMode = mode;
+      const tabDrive = document.getElementById('tabUploadDrive');
+      const tabLocal = document.getElementById('tabUploadLocal');
+      const driveForm = document.getElementById('driveUploadForm');
+      const localForm = document.getElementById('localUploadForm');
+
+      if (mode === 'drive') {
+        tabDrive.className = 'flex-1 py-2 text-xs font-bold rounded-lg transition-all bg-white text-indigo-600 shadow-sm flex items-center justify-center gap-1.5';
+        tabLocal.className = 'flex-1 py-2 text-xs font-bold rounded-lg transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5';
+        driveForm.classList.remove('hidden');
+        localForm.classList.add('hidden');
+      } else {
+        tabLocal.className = 'flex-1 py-2 text-xs font-bold rounded-lg transition-all bg-white text-indigo-600 shadow-sm flex items-center justify-center gap-1.5';
+        tabDrive.className = 'flex-1 py-2 text-xs font-bold rounded-lg transition-all text-slate-600 hover:text-slate-900 flex items-center justify-center gap-1.5';
+        localForm.classList.remove('hidden');
+        driveForm.classList.add('hidden');
+      }
+    }
+
+    async function handleDriveUpload(e) {
+      e.preventDefault();
+      const driveUrl = document.getElementById('driveUrlInput').value.trim();
+      const course = document.getElementById('driveCourseSelect').value;
+      const title = document.getElementById('driveTitleInput').value.trim();
+      const btn = document.getElementById('driveSubmitBtn');
+
+      if (!driveUrl) return;
+
+      btn.disabled = true;
+      btn.textContent = 'Drive\'dan İndiriliyor...';
+
+      const formData = new FormData();
+      formData.append('drive_url', driveUrl);
+      formData.append('course', course);
+      if (title) formData.append('custom_title', title);
+
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/upload-drive', { method: 'POST', body: formData, headers });
+        const data = await res.json();
+        if (res.ok) {
+          alert('✓ ' + (data.message || 'Not Google Drive\'dan başarıyla aktarıldı!'));
+          closeUploadModal();
+          await loadData();
+        } else {
+          alert('Hata: ' + (data.detail || 'Aktarma başarısız oldu.'));
+        }
+      } catch (err) {
+        alert('Sunucu hatası: ' + err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Drive\'dan Aktar';
+      }
+    }
+
     function openUploadModal() {
+      populateUploadSelects();
       document.getElementById('uploadForm').reset();
       document.getElementById('uploadModal').classList.remove('hidden');
     }
