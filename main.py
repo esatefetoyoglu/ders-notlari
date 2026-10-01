@@ -6,7 +6,7 @@ import base64
 import secrets
 import hashlib
 from typing import List, Optional
-from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request, Response, Depends
+from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from pypdf import PdfReader, PdfWriter
 
@@ -29,7 +29,6 @@ def hash_password(password: str, salt: str = None) -> tuple:
 
 def load_auth_data():
     if not os.path.exists(AUTH_FILE):
-        # Default admin account
         admin_hash, admin_salt = hash_password("admin123")
         data = {
             "users": {
@@ -95,6 +94,12 @@ async def home():
     with open(template_path, "r", encoding="utf-8") as f:
         return HTMLResponse(content=f.read())
 
+
+@app.get("/api/config")
+async def get_config():
+    client_id = os.getenv("GOOGLE_CLIENT_ID", "100935865119-qaqqc9tprpt32srs7niab6kcdclks2up.apps.googleusercontent.com")
+    return {"google_client_id": client_id}
+
 @app.get("/api/auth/me")
 async def auth_me(request: Request):
     user = get_current_user(request)
@@ -107,7 +112,7 @@ async def auth_me(request: Request):
     return {"authenticated": False, "username": None, "role": "guest"}
 
 @app.post("/api/auth/register")
-async def register(username: str = Form(...), password: str = Form(...)):
+async def register(response: Response, username: str = Form(...), password: str = Form(...)):
     username = username.strip().lower()
     if not username or not password or len(password) < 4:
         raise HTTPException(status_code=400, detail="Kullanıcı adı ve en az 4 karakterli şifre girin.")
@@ -123,8 +128,13 @@ async def register(username: str = Form(...), password: str = Form(...)):
         "salt": s,
         "role": "user"
     }
+    
+    token = secrets.token_hex(24)
+    data["sessions"][token] = username
     save_auth_data(data)
-    return {"status": "success", "message": "Kayıt başarılı! Şimdi giriş yapabilirsiniz."}
+    
+    response.set_cookie(key="session_token", value=token, httponly=True, max_age=86400*30, samesite="lax")
+    return {"status": "success", "username": username, "role": "user"}
 
 @app.post("/api/auth/login")
 async def login(response: Response, username: str = Form(...), password: str = Form(...)):
@@ -159,26 +169,21 @@ async def logout(request: Request, response: Response):
 @app.post("/api/auth/google")
 async def google_login(response: Response, credential: str = Form(...)):
     try:
-        # Decode JWT payload (middle segment)
         parts = credential.split(".")
         if len(parts) != 3:
             raise ValueError("Geçersiz token formatı")
         
-        # Add padding if needed
         payload_b64 = parts[1] + "=" * (-len(parts[1]) % 4)
         payload_json = base64.urlsafe_b64decode(payload_b64.encode("utf-8")).decode("utf-8")
         payload = json.loads(payload_json)
         
         email = payload.get("email", "").lower()
-        name = payload.get("name", email.split("@")[0])
-        
         if not email:
             raise HTTPException(status_code=400, detail="Google e-posta bilgisi alınamadı.")
             
         data = load_auth_data()
         username = email.split("@")[0]
         
-        # If user doesn't exist, create one with role 'user'
         if username not in data["users"]:
             data["users"][username] = {
                 "username": username,
@@ -196,9 +201,13 @@ async def google_login(response: Response, credential: str = Form(...)):
     except Exception as e:
         raise HTTPException(status_code=400, detail="Google girişi doğrulanamadı: " + str(e))
 
-# --- File Operations ---
+# --- Protected Content Routes ---
 @app.get("/api/files")
-async def list_files():
+async def list_files(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+
     data = []
     courses = [d for d in os.listdir(BASE_UPLOAD_DIR) if os.path.isdir(os.path.join(BASE_UPLOAD_DIR, d))]
     courses.sort()
@@ -257,7 +266,11 @@ async def delete_pdf(request: Request, course: str, filename: str):
     raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
 
 @app.get("/api/view/{course}/{filename}")
-async def view_pdf(course: str, filename: str):
+async def view_pdf(request: Request, course: str, filename: str):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+
     fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
     if not os.path.exists(fpath):
         raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
@@ -273,7 +286,11 @@ async def view_pdf(course: str, filename: str):
     )
 
 @app.get("/api/download/{course}/{filename}")
-async def download_full(course: str, filename: str):
+async def download_full(request: Request, course: str, filename: str):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+
     fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
     if not os.path.exists(fpath):
         raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
@@ -289,7 +306,11 @@ async def download_full(course: str, filename: str):
     )
 
 @app.get("/api/download-range/{course}/{filename}")
-async def download_range(course: str, filename: str, pages: str):
+async def download_range(request: Request, course: str, filename: str, pages: str):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+
     fpath = os.path.join(BASE_UPLOAD_DIR, course, filename)
     if not os.path.exists(fpath):
         raise HTTPException(status_code=404, detail="Dosya bulunamadı.")
