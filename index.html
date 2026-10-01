@@ -201,6 +201,10 @@
 
       <!-- Action Buttons -->
       <div class="flex items-center gap-2">
+        <a id="viewerDirectLink" href="#" target="_blank" class="bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 transition-all" title="Tarayıcıda Yeni Sekmede Aç">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14"></path></svg>
+          <span class="hidden sm:inline">Yeni Sekmede Aç</span>
+        </a>
         <button onclick="downloadAnnotatedPDF()" id="saveAnnotatedBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 shadow transition-all">
           <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
           <span id="saveAnnotatedText">Çizimli İndir</span>
@@ -227,19 +231,19 @@
 
       <div class="flex items-center gap-1.5 bg-slate-900/60 px-2.5 py-1.5 rounded-xl border border-slate-700">
         <span class="text-slate-400 text-[11px] mr-1">Renk:</span>
-        <button onclick="setColor('#ef4444')" class="w-5 h-5 rounded-full bg-red-500 ring-2 ring-transparent focus:ring-white transition-all"></button>
-        <button onclick="setColor('#3b82f6')" class="w-5 h-5 rounded-full bg-blue-500 ring-2 ring-transparent focus:ring-white transition-all"></button>
-        <button onclick="setColor('#eab308')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-transparent focus:ring-white transition-all"></button>
-        <button onclick="setColor('#10b981')" class="w-5 h-5 rounded-full bg-emerald-500 ring-2 ring-transparent focus:ring-white transition-all"></button>
-        <button onclick="setColor('#000000')" class="w-5 h-5 rounded-full bg-black ring-1 ring-slate-600 focus:ring-white transition-all"></button>
+        <button id="color_red" onclick="setColor('#ef4444')" class="w-5 h-5 rounded-full bg-red-500 ring-2 ring-white scale-110 transition-all" title="Kırmızı"></button>
+        <button id="color_blue" onclick="setColor('#3b82f6')" class="w-5 h-5 rounded-full bg-blue-500 ring-2 ring-transparent transition-all" title="Mavi"></button>
+        <button id="color_yellow" onclick="setColor('#eab308')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-transparent transition-all" title="Sarı"></button>
+        <button id="color_green" onclick="setColor('#10b981')" class="w-5 h-5 rounded-full bg-emerald-500 ring-2 ring-transparent transition-all" title="Yeşil"></button>
+        <button id="color_black" onclick="setColor('#000000')" class="w-5 h-5 rounded-full bg-black ring-1 ring-slate-600 transition-all" title="Siyah"></button>
         <input type="color" id="customColor" onchange="setColor(this.value)" value="#ef4444" class="w-6 h-6 rounded-full cursor-pointer bg-transparent border-0">
       </div>
 
       <div class="flex items-center gap-1.5 bg-slate-900/60 px-2.5 py-1.5 rounded-xl border border-slate-700">
         <span class="text-slate-400 text-[11px]">Kalınlık:</span>
-        <button onclick="setSize(2)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">İnce</button>
-        <button onclick="setSize(5)" class="px-2 py-0.5 rounded bg-indigo-600 font-mono" id="sizeNormal">Orta</button>
-        <button onclick="setSize(12)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">Kalın</button>
+        <button id="btnSizeThin" onclick="setSize(2)" class="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-all font-mono">İnce</button>
+        <button id="btnSizeNormal" onclick="setSize(5)" class="px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600 text-white shadow transition-all font-mono">Orta</button>
+        <button id="btnSizeThick" onclick="setSize(12)" class="px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-all font-mono">Kalın</button>
       </div>
 
       <div class="flex items-center gap-1">
@@ -253,8 +257,12 @@
     </div>
 
     <!-- Viewer Canvas Container -->
-    <div id="viewerViewport" class="flex-1 overflow-auto p-4 flex items-center justify-center custom-scrollbar">
-      <div id="canvasWrapper" class="relative shadow-2xl rounded-lg bg-white overflow-hidden">
+    <div id="viewerViewport" class="flex-1 overflow-auto p-4 flex flex-col items-center justify-start custom-scrollbar relative">
+      <div id="viewerLoading" class="absolute inset-0 flex flex-col items-center justify-center bg-slate-900/70 z-20 space-y-3">
+        <div class="w-10 h-10 border-4 border-indigo-500 border-t-transparent rounded-full animate-spin"></div>
+        <p class="text-sm font-semibold text-white">PDF hazırlanıyor...</p>
+      </div>
+      <div id="canvasWrapper" class="relative shadow-2xl rounded-xl bg-white overflow-hidden my-auto">
         <canvas id="pdfCanvas" class="block"></canvas>
         <canvas id="drawingCanvas" class="absolute inset-0 cursor-crosshair"></canvas>
       </div>
@@ -373,7 +381,14 @@
   </div>
 
   <script>
-    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+        // Safe Worker setup via Blob to bypass cross-origin restrictions
+    try {
+      const workerCode = 'importScripts("https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js");';
+      const blob = new Blob([workerCode], { type: "application/javascript" });
+      pdfjsLib.GlobalWorkerOptions.workerSrc = URL.createObjectURL(blob);
+    } catch (e) {
+      pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+    }
 
     let currentUser = { authenticated: false, username: null, role: 'guest' };
     let courses = ['Tümü'];
@@ -688,31 +703,66 @@
     }
 
     // --- PDF Viewer & Drawing ---
+    let currentRenderTask = null;
+
     async function openViewer(course, filename, title) {
       currentViewerFile = { course, filename, title };
       document.getElementById('viewerTitle').textContent = title;
       document.getElementById('viewerCourse').textContent = course;
       document.getElementById('viewerModal').classList.remove('hidden');
+      const dl = document.getElementById('viewerDirectLink'); if (dl) dl.href = `/api/view/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`;
+
+      const loader = document.getElementById('viewerLoading');
+      if (loader) loader.classList.remove('hidden');
 
       pageStrokes = {};
       currentPageNum = 1;
+      currentScale = 1.25;
 
       try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
         const url = `/api/view/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`;
-        const res = await fetch(url);
+        const res = await fetch(url, { headers });
+
+        if (!res.ok) {
+          const errData = await res.json().catch(() => ({}));
+          throw new Error(errData.detail || 'Sunucudan PDF alınamadı');
+        }
+
         currentPdfBytes = await res.arrayBuffer();
         
-        pdfDoc = await pdfjsLib.getDocument({ data: currentPdfBytes }).promise;
+        const loadingTask = pdfjsLib.getDocument({
+          data: new Uint8Array(currentPdfBytes),
+          cMapUrl: 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/cmaps/',
+          cMapPacked: true
+        });
+
+        pdfDoc = await loadingTask.promise;
         document.getElementById('pageCount').textContent = pdfDoc.numPages;
+
+        // Auto-fit initial scale to container width
+        const firstPage = await pdfDoc.getPage(1);
+        const unscaledVp = firstPage.getViewport({ scale: 1.0 });
+        const viewportContainer = document.getElementById('viewerViewport');
+        const availableWidth = viewportContainer ? (viewportContainer.clientWidth - 48) : 700;
+        currentScale = Math.min(1.6, Math.max(0.7, availableWidth / unscaledVp.width));
+        document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%';
+
         await renderViewerPage(currentPageNum);
         setupDrawingEvents();
       } catch (err) {
-        alert('PDF yüklenirken hata oluştu: ' + err);
+        alert('PDF açılırken hata oluştu: ' + err.message);
         closeViewer();
+      } finally {
+        if (loader) loader.classList.add('hidden');
       }
     }
 
     function closeViewer() {
+      if (currentRenderTask) {
+        try { currentRenderTask.cancel(); } catch (e) {}
+      }
       document.getElementById('viewerModal').classList.add('hidden');
       currentViewerFile = null;
       pdfDoc = null;
@@ -725,6 +775,10 @@
       document.getElementById('pageNum').textContent = num;
       document.getElementById('prevBtn').disabled = (num <= 1);
       document.getElementById('nextBtn').disabled = (num >= pdfDoc.numPages);
+
+      if (currentRenderTask) {
+        try { currentRenderTask.cancel(); } catch (e) {}
+      }
 
       const page = await pdfDoc.getPage(num);
       const viewport = page.getViewport({ scale: currentScale });
@@ -746,7 +800,14 @@
         viewport: viewport
       };
 
-      await page.render(renderContext).promise;
+      currentRenderTask = page.render(renderContext);
+      try {
+        await currentRenderTask.promise;
+      } catch (err) {
+        if (err && err.name !== 'RenderingCancelledException') {
+          console.error('Page render error:', err);
+        }
+      }
       redrawCurrentPageStrokes();
     }
 
@@ -764,10 +825,41 @@
 
     function setColor(color) {
       currentColor = color;
-      document.getElementById('customColor').value = color;
+      const customInp = document.getElementById('customColor');
+      if (customInp) customInp.value = color;
+
+      const colorMap = {
+        '#ef4444': 'color_red',
+        '#3b82f6': 'color_blue',
+        '#eab308': 'color_yellow',
+        '#10b981': 'color_green',
+        '#000000': 'color_black'
+      };
+
+      Object.keys(colorMap).forEach(c => {
+        const el = document.getElementById(colorMap[c]);
+        if (el) {
+          if (c === color) {
+            el.className = el.className.replace('ring-transparent', '').trim() + ' ring-2 ring-white scale-110';
+          } else {
+            el.className = el.className.replace('ring-2 ring-white scale-110', '').trim() + ' ring-transparent';
+          }
+        }
+      });
+
       if (currentTool === 'eraser') selectTool('pen');
     }
-    function setSize(sz) { currentSize = sz; }
+    function setSize(sz) {
+      currentSize = sz;
+      const btnThin = document.getElementById('btnSizeThin');
+      const btnNorm = document.getElementById('btnSizeNormal');
+      const btnThick = document.getElementById('btnSizeThick');
+      const defCls = 'px-2.5 py-1 rounded-lg text-xs font-semibold text-slate-300 hover:bg-slate-800 transition-all font-mono';
+      const actCls = 'px-2.5 py-1 rounded-lg text-xs font-semibold bg-indigo-600 text-white shadow transition-all font-mono';
+      if (btnThin) btnThin.className = (sz === 2) ? actCls : defCls;
+      if (btnNorm) btnNorm.className = (sz === 5) ? actCls : defCls;
+      if (btnThick) btnThick.className = (sz === 12) ? actCls : defCls;
+    }
 
     function setupDrawingEvents() {
       const canvas = document.getElementById('drawingCanvas');
