@@ -1,0 +1,763 @@
+<!DOCTYPE html>
+<html lang="tr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ders Notları & PDF Portalı</title>
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- PDF.js from Cloudflare -->
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+  <!-- pdf-lib for merging drawings and client-side extraction -->
+  <script src="https://unpkg.com/pdf-lib@1.17.9/dist/pdf-lib.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <style>
+    body { font-family: 'Plus Jakarta Sans', sans-serif; }
+    .custom-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
+    .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #cbd5e1; border-radius: 9999px; }
+    #drawingCanvas { touch-action: none; }
+  </style>
+</head>
+<body class="bg-slate-50 text-slate-800 min-h-screen flex flex-col">
+
+  <!-- Header -->
+  <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-sm">
+    <div class="max-w-6xl mx-auto px-4 py-4 flex flex-col sm:flex-row items-center justify-between gap-4">
+      <div class="flex items-center gap-3">
+        <div class="w-10 h-10 rounded-xl bg-indigo-600 text-white flex items-center justify-center shadow-md shadow-indigo-100">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253"></path>
+          </svg>
+        </div>
+        <div>
+          <h1 class="text-xl font-bold text-slate-900 tracking-tight">Ders PDF Portalı</h1>
+          <p class="text-xs text-slate-500">PDF Okuma, Çizim Yapma & Özel Sayfa İndirme</p>
+        </div>
+      </div>
+      <button onclick="openUploadModal()" class="w-full sm:w-auto inline-flex items-center justify-center gap-2 bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-semibold px-4 py-2.5 rounded-xl shadow-sm transition-all hover:shadow active:scale-95">
+        <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 4v16m8-8H4"></path>
+        </svg>
+        Yeni PDF Yükle
+      </button>
+    </div>
+  </header>
+
+  <!-- Main Content -->
+  <main class="max-w-6xl mx-auto px-4 py-8 flex-1 w-full space-y-6">
+    <!-- Search & Filter Controls -->
+    <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-sm space-y-4">
+      <div class="flex flex-col md:flex-row items-center justify-between gap-3">
+        <div class="relative w-full md:w-96">
+          <input type="text" id="searchInput" oninput="renderFiles()" placeholder="Ders adı veya not ara..." 
+            class="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white transition-all">
+          <svg class="w-4 h-4 text-slate-400 absolute left-3.5 top-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z"></path>
+          </svg>
+        </div>
+        <div class="text-xs text-slate-500 flex items-center gap-2">
+          <span id="fileCountBadge" class="font-medium bg-slate-100 text-slate-700 px-2.5 py-1 rounded-full">0 Not</span>
+          <span>•</span>
+          <span class="text-emerald-600 font-medium">✏️ Canlı Çizim & Fosforlu Kalem Aktif</span>
+        </div>
+      </div>
+      <div class="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar" id="categoryPills"></div>
+    </div>
+
+    <!-- Cards Grid -->
+    <div id="fileGrid" class="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-5"></div>
+
+    <!-- Empty State -->
+    <div id="emptyState" class="hidden text-center py-16 bg-white rounded-2xl border border-dashed border-slate-300 p-8 space-y-3">
+      <div class="w-14 h-14 bg-indigo-50 text-indigo-500 rounded-2xl flex items-center justify-center mx-auto">
+        <svg class="w-7 h-7" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+          <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z"></path>
+        </svg>
+      </div>
+      <h3 class="font-semibold text-slate-800">Henüz Not Bulunmuyor</h3>
+      <p class="text-sm text-slate-500 max-w-sm mx-auto">Yukarıdaki "Yeni PDF Yükle" butonuna tıklayarak ilk notunuzu ekleyebilirsiniz.</p>
+    </div>
+  </main>
+
+  <!-- ==================== PDF VIEWER & ANNOTATION MODAL ==================== -->
+  <div id="viewerModal" class="fixed inset-0 bg-slate-900/90 backdrop-blur-md z-50 hidden flex flex-col">
+    <!-- Top Bar -->
+    <div class="bg-slate-900 border-b border-slate-800 px-4 py-3 text-white flex flex-wrap items-center justify-between gap-3 shadow-lg">
+      <div class="flex items-center gap-3">
+        <div class="w-8 h-8 rounded-lg bg-indigo-600 flex items-center justify-center font-bold text-xs">PDF</div>
+        <div>
+          <h3 id="viewerTitle" class="font-bold text-sm text-slate-100 max-w-xs sm:max-w-md truncate">Ders Notu</h3>
+          <p id="viewerCourse" class="text-xs text-indigo-400">Kategori</p>
+        </div>
+      </div>
+
+      <!-- Navigation & Zoom Controls -->
+      <div class="flex items-center gap-2 bg-slate-800 px-3 py-1.5 rounded-xl border border-slate-700">
+        <button onclick="prevPage()" class="p-1 text-slate-300 hover:text-white disabled:opacity-30" id="prevBtn" title="Önceki Sayfa">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 19l-7-7 7-7"></path></svg>
+        </button>
+        <span class="text-xs font-semibold px-2 text-slate-200">
+          <span id="pageNum">1</span> / <span id="pageCount">1</span>
+        </span>
+        <button onclick="nextPage()" class="p-1 text-slate-300 hover:text-white disabled:opacity-30" id="nextBtn" title="Sonraki Sayfa">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M9 5l7 7-7 7"></path></svg>
+        </button>
+        <div class="h-4 w-[1px] bg-slate-700 mx-1"></div>
+        <button onclick="zoomOut()" class="p-1 text-slate-300 hover:text-white text-xs font-bold" title="Uzaklaştır">-</button>
+        <span id="zoomLevel" class="text-xs text-slate-400 px-1">100%</span>
+        <button onclick="zoomIn()" class="p-1 text-slate-300 hover:text-white text-xs font-bold" title="Yakınlaştır">+</button>
+      </div>
+
+      <!-- Action Buttons -->
+      <div class="flex items-center gap-2">
+        <button onclick="downloadAnnotatedPDF()" id="saveAnnotatedBtn" class="bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold px-3 py-2 rounded-xl flex items-center gap-1.5 shadow transition-all">
+          <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path></svg>
+          <span id="saveAnnotatedText">Çizimli İndir</span>
+        </button>
+        <button onclick="closeViewer()" class="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-xl transition-all" title="Kapat">
+          <svg class="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+    </div>
+
+    <!-- Drawing Toolbar Ribbon -->
+    <div class="bg-slate-800/90 border-b border-slate-700/80 px-4 py-2 flex flex-wrap items-center justify-center gap-3 text-white text-xs">
+      <!-- Tool Selection -->
+      <div class="flex items-center gap-1 bg-slate-900/60 p-1 rounded-xl border border-slate-700">
+        <button id="toolPen" onclick="selectTool('pen')" class="px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow">
+          ✏️ Kalem
+        </button>
+        <button id="toolHighlighter" onclick="selectTool('highlighter')" class="px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all">
+          🖍️ Fosforlu
+        </button>
+        <button id="toolEraser" onclick="selectTool('eraser')" class="px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all">
+          🧹 Silgi
+        </button>
+      </div>
+
+      <!-- Color Palette -->
+      <div class="flex items-center gap-1.5 bg-slate-900/60 px-2.5 py-1.5 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-[11px] mr-1">Renk:</span>
+        <button onclick="setColor('#ef4444')" class="w-5 h-5 rounded-full bg-red-500 ring-2 ring-transparent focus:ring-white transition-all" title="Kırmızı"></button>
+        <button onclick="setColor('#3b82f6')" class="w-5 h-5 rounded-full bg-blue-500 ring-2 ring-transparent focus:ring-white transition-all" title="Mavi"></button>
+        <button onclick="setColor('#eab308')" class="w-5 h-5 rounded-full bg-yellow-400 ring-2 ring-transparent focus:ring-white transition-all" title="Sarı"></button>
+        <button onclick="setColor('#10b981')" class="w-5 h-5 rounded-full bg-emerald-500 ring-2 ring-transparent focus:ring-white transition-all" title="Yeşil"></button>
+        <button onclick="setColor('#000000')" class="w-5 h-5 rounded-full bg-black ring-1 ring-slate-600 focus:ring-white transition-all" title="Siyah"></button>
+        <input type="color" id="customColor" onchange="setColor(this.value)" value="#ef4444" class="w-6 h-6 rounded-full cursor-pointer bg-transparent border-0">
+      </div>
+
+      <!-- Stroke Size -->
+      <div class="flex items-center gap-1.5 bg-slate-900/60 px-2.5 py-1.5 rounded-xl border border-slate-700">
+        <span class="text-slate-400 text-[11px]">Kalınlık:</span>
+        <button onclick="setSize(2)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">İnce</button>
+        <button onclick="setSize(5)" class="px-2 py-0.5 rounded bg-indigo-600 font-mono" id="sizeNormal">Orta</button>
+        <button onclick="setSize(12)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">Kalın</button>
+        <button onclick="setSize(24)" class="px-2 py-0.5 rounded bg-slate-800 hover:bg-slate-700 font-mono">Geniş</button>
+      </div>
+
+      <!-- Undo & Clear -->
+      <div class="flex items-center gap-1">
+        <button onclick="undoStroke()" class="px-2.5 py-1.5 bg-slate-700 hover:bg-slate-600 text-slate-200 rounded-lg flex items-center gap-1 transition-all" title="Son Çizgiyi Geri Al">
+          ↩️ Geri Al
+        </button>
+        <button onclick="clearCurrentPageDrawings()" class="px-2.5 py-1.5 bg-rose-900/40 hover:bg-rose-900/60 text-rose-300 rounded-lg flex items-center gap-1 transition-all" title="Bu Sayfadaki Çizimleri Temizle">
+          🗑️ Temizle
+        </button>
+      </div>
+    </div>
+
+    <!-- Viewer Canvas Container -->
+    <div id="viewerViewport" class="flex-1 overflow-auto p-4 flex items-center justify-center custom-scrollbar">
+      <div id="canvasWrapper" class="relative shadow-2xl rounded-lg bg-white overflow-hidden">
+        <!-- Background PDF Canvas -->
+        <canvas id="pdfCanvas" class="block"></canvas>
+        <!-- Overlay Drawing Canvas -->
+        <canvas id="drawingCanvas" class="absolute inset-0 cursor-crosshair"></canvas>
+      </div>
+    </div>
+  </div>
+
+  <!-- Upload Modal -->
+  <div id="uploadModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-lg w-full p-6 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <h3 class="font-bold text-slate-900 text-lg">Ders Notu Yükle</h3>
+        <button onclick="closeUploadModal()" class="text-slate-400 hover:text-slate-600 p-1">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+      <form id="uploadForm" onsubmit="handleUpload(event)" class="space-y-4">
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">PDF Dosyası</label>
+          <input type="file" id="pdfFileInput" accept="application/pdf" required 
+            class="w-full text-sm text-slate-500 file:mr-4 file:py-2 file:px-4 file:rounded-xl file:border-0 file:text-xs file:font-semibold file:bg-indigo-50 file:text-indigo-700 hover:file:bg-indigo-100 cursor-pointer">
+        </div>
+        <div>
+          <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider mb-1.5">Ders / Kategori</label>
+          <div class="flex gap-2">
+            <select id="courseSelect" class="flex-1 px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white"></select>
+            <button type="button" onclick="promptNewCourse()" class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium">+ Yeni Ders</button>
+          </div>
+        </div>
+        <div class="flex justify-end gap-3 pt-3 border-t border-slate-100">
+          <button type="button" onclick="closeUploadModal()" class="px-4 py-2 text-sm text-slate-600 font-medium">İptal</button>
+          <button type="submit" id="uploadSubmitBtn" class="px-5 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm">Yükle</button>
+        </div>
+      </form>
+    </div>
+  </div>
+
+  <!-- Range Download Modal -->
+  <div id="rangeModal" class="fixed inset-0 bg-slate-900/40 backdrop-blur-sm z-40 hidden flex items-center justify-center p-4">
+    <div class="bg-white rounded-2xl border border-slate-200 shadow-xl max-w-md w-full p-6 space-y-5">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div>
+          <h3 class="font-bold text-slate-900 text-lg">Sayfa Aralığı İndir</h3>
+          <p id="rangeModalSub" class="text-xs text-slate-500 truncate max-w-xs"></p>
+        </div>
+        <button onclick="closeRangeModal()" class="text-slate-400 hover:text-slate-600 p-1">
+          <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+        </button>
+      </div>
+      <div class="space-y-4">
+        <div class="bg-indigo-50/60 border border-indigo-100 rounded-xl p-3.5 text-xs text-indigo-900 space-y-1">
+          <p class="font-semibold">💡 Nasıl Yazabilirsiniz?</p>
+          <p>• Aralık için: <code class="bg-white px-1 py-0.5 rounded border border-indigo-200">1-5</code> (1'den 5'e kadar)</p>
+          <p>• Tek sayfalar için: <code class="bg-white px-1 py-0.5 rounded border border-indigo-200">1, 4, 7</code></p>
+          <p>• Karışık: <code class="bg-white px-1 py-0.5 rounded border border-indigo-200">1-3, 6, 8-10</code></p>
+        </div>
+        <div>
+          <div class="flex justify-between items-center mb-1">
+            <label class="block text-xs font-semibold text-slate-700 uppercase tracking-wider">İstenen Sayfalar</label>
+            <span id="rangeMaxPages" class="text-xs font-medium text-slate-500"></span>
+          </div>
+          <input type="text" id="pageRangeInput" placeholder="Örn: 2-7" 
+            class="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-mono focus:outline-none focus:ring-2 focus:ring-indigo-500 focus:bg-white">
+        </div>
+        <div class="flex justify-end gap-3 pt-3 border-t border-slate-100">
+          <button type="button" onclick="closeRangeModal()" class="px-4 py-2 text-sm text-slate-600 font-medium">Kapat</button>
+          <button type="button" onclick="executeRangeDownload()" class="px-5 py-2 text-sm bg-indigo-600 hover:bg-indigo-700 text-white font-semibold rounded-xl shadow-sm flex items-center gap-2">
+            İndir
+          </button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <footer class="bg-white border-t border-slate-200 py-6 text-center text-xs text-slate-400">
+    <p>Ders Notları & PDF Portalı • Python & Canlı Çizim Desteği</p>
+  </footer>
+
+  <script>
+    // PDF.js worker setup
+    pdfjsLib.GlobalWorkerOptions.workerSrc = 'https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+
+    let courses = ['Tümü'];
+    let selectedCategory = 'Tümü';
+    let files = [];
+    let currentModalFile = null;
+
+    // --- Viewer & Annotation State ---
+    let currentViewerFile = null;
+    let pdfDoc = null;
+    let currentPdfBytes = null;
+    let currentPageNum = 1;
+    let currentScale = 1.25;
+    let currentTool = 'pen'; // 'pen', 'highlighter', 'eraser'
+    let currentColor = '#ef4444';
+    let currentSize = 5;
+    let isDrawing = false;
+    let currentStroke = [];
+    
+    // Key: pageNum (1-based), Value: Array of stroke objects
+    let pageStrokes = {};
+
+    async function loadData() {
+      const res = await fetch('/api/files');
+      const data = await res.json();
+      courses = ['Tümü', ...data.courses];
+      files = data.files;
+      renderCategories();
+      renderFiles();
+    }
+
+    function renderCategories() {
+      const container = document.getElementById('categoryPills');
+      const select = document.getElementById('courseSelect');
+      container.innerHTML = '';
+      select.innerHTML = '';
+
+      courses.forEach(cat => {
+        const btn = document.createElement('button');
+        const isActive = cat === selectedCategory;
+        btn.className = `px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+          isActive ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
+        }`;
+        btn.textContent = cat;
+        btn.onclick = () => {
+          selectedCategory = cat;
+          renderCategories();
+          renderFiles();
+        };
+        container.appendChild(btn);
+
+        if (cat !== 'Tümü') {
+          const opt = document.createElement('option');
+          opt.value = cat;
+          opt.textContent = cat;
+          select.appendChild(opt);
+        }
+      });
+    }
+
+    function renderFiles() {
+      const grid = document.getElementById('fileGrid');
+      const empty = document.getElementById('emptyState');
+      const search = document.getElementById('searchInput').value.toLowerCase().trim();
+
+      const filtered = files.filter(item => {
+        const matchCat = (selectedCategory === 'Tümü') || (item.course === selectedCategory);
+        const matchSearch = (!search) || (item.title.toLowerCase().includes(search) || item.course.toLowerCase().includes(search));
+        return matchCat && matchSearch;
+      });
+
+      document.getElementById('fileCountBadge').textContent = `${filtered.length} Not Bulundu`;
+
+      if (filtered.length === 0) {
+        grid.innerHTML = '';
+        empty.classList.remove('hidden');
+        return;
+      }
+
+      empty.classList.add('hidden');
+      grid.innerHTML = filtered.map(item => `
+        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between group">
+          <div class="space-y-3">
+            <span class="inline-block text-[11px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg">
+              ${escapeHtml(item.course)}
+            </span>
+            <div>
+              <h4 class="font-bold text-slate-900 text-base leading-snug line-clamp-2">${escapeHtml(item.title)}</h4>
+              <div class="flex items-center gap-3 text-xs text-slate-400 mt-2">
+                <span>${item.page_count} Sayfa</span>
+                <span>•</span>
+                <span>${formatBytes(item.size)}</span>
+              </div>
+            </div>
+          </div>
+
+          <!-- Action Buttons -->
+          <div class="pt-5 mt-4 border-t border-slate-100 space-y-2">
+            <!-- Open Viewer Button -->
+            <button onclick="openViewer('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}', '${escapeHtml(item.title)}')"
+              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm active:scale-98">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
+              İncele & Çizim Yap
+            </button>
+
+            <!-- Download Buttons -->
+            <div class="flex items-center gap-2">
+              <a href="/api/download/${encodeURIComponent(item.course)}/${encodeURIComponent(item.filename)}" 
+                class="flex-1 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-3 rounded-xl transition-all text-center">
+                Tam İndir
+              </a>
+              <button onclick="openRangeModal('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}', '${escapeHtml(item.title)}', ${item.page_count})" 
+                class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold py-2 px-3 rounded-xl transition-all text-center">
+                Sayfa Aralığı
+              </button>
+            </div>
+          </div>
+        </div>
+      `).join('');
+    }
+
+    // --- PDF Viewer & Drawing Logic ---
+    async function openViewer(course, filename, title) {
+      currentViewerFile = { course, filename, title };
+      document.getElementById('viewerTitle').textContent = title;
+      document.getElementById('viewerCourse').textContent = course;
+      document.getElementById('viewerModal').classList.remove('hidden');
+
+      pageStrokes = {};
+      currentPageNum = 1;
+
+      try {
+        const url = `/api/view/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`;
+        const res = await fetch(url);
+        currentPdfBytes = await res.arrayBuffer();
+        
+        pdfDoc = await pdfjsLib.getDocument({ data: currentPdfBytes }).promise;
+        document.getElementById('pageCount').textContent = pdfDoc.numPages;
+        await renderViewerPage(currentPageNum);
+        setupDrawingEvents();
+      } catch (err) {
+        alert('PDF yüklenirken hata oluştu: ' + err);
+        closeViewer();
+      }
+    }
+
+    function closeViewer() {
+      document.getElementById('viewerModal').classList.add('hidden');
+      currentViewerFile = null;
+      pdfDoc = null;
+      currentPdfBytes = null;
+    }
+
+    async function renderViewerPage(num) {
+      if (!pdfDoc) return;
+      currentPageNum = num;
+      document.getElementById('pageNum').textContent = num;
+      document.getElementById('prevBtn').disabled = (num <= 1);
+      document.getElementById('nextBtn').disabled = (num >= pdfDoc.numPages);
+
+      const page = await pdfDoc.getPage(num);
+      const viewport = page.getViewport({ scale: currentScale });
+
+      const pdfCanvas = document.getElementById('pdfCanvas');
+      const drawCanvas = document.getElementById('drawingCanvas');
+      const wrapper = document.getElementById('canvasWrapper');
+
+      pdfCanvas.width = viewport.width;
+      pdfCanvas.height = viewport.height;
+      drawCanvas.width = viewport.width;
+      drawCanvas.height = viewport.height;
+
+      wrapper.style.width = viewport.width + 'px';
+      wrapper.style.height = viewport.height + 'px';
+
+      const renderContext = {
+        canvasContext: pdfCanvas.getContext('2d'),
+        viewport: viewport
+      };
+
+      await page.render(renderContext).promise;
+      redrawCurrentPageStrokes();
+    }
+
+    function prevPage() {
+      if (currentPageNum > 1) {
+        renderViewerPage(currentPageNum - 1);
+      }
+    }
+
+    function nextPage() {
+      if (pdfDoc && currentPageNum < pdfDoc.numPages) {
+        renderViewerPage(currentPageNum + 1);
+      }
+    }
+
+    function zoomIn() {
+      currentScale += 0.2;
+      document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%';
+      renderViewerPage(currentPageNum);
+    }
+
+    function zoomOut() {
+      if (currentScale > 0.6) {
+        currentScale -= 0.2;
+        document.getElementById('zoomLevel').textContent = Math.round((currentScale / 1.25) * 100) + '%';
+        renderViewerPage(currentPageNum);
+      }
+    }
+
+    // --- Drawing Tool Settings ---
+    function selectTool(tool) {
+      currentTool = tool;
+      document.getElementById('toolPen').className = (tool === 'pen') 
+        ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' 
+        : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
+      
+      document.getElementById('toolHighlighter').className = (tool === 'highlighter') 
+        ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' 
+        : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
+
+      document.getElementById('toolEraser').className = (tool === 'eraser') 
+        ? 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 transition-all bg-indigo-600 text-white shadow' 
+        : 'px-3 py-1.5 rounded-lg font-medium flex items-center gap-1.5 text-slate-300 hover:bg-slate-800 transition-all';
+    }
+
+    function setColor(color) {
+      currentColor = color;
+      document.getElementById('customColor').value = color;
+      if (currentTool === 'eraser') selectTool('pen');
+    }
+
+    function setSize(sz) {
+      currentSize = sz;
+    }
+
+    function setupDrawingEvents() {
+      const canvas = document.getElementById('drawingCanvas');
+      const ctx = canvas.getContext('2d');
+
+      const getPos = (e) => {
+        const rect = canvas.getBoundingClientRect();
+        return {
+          x: (e.clientX - rect.left) * (canvas.width / rect.width),
+          y: (e.clientY - rect.top) * (canvas.height / rect.height)
+        };
+      };
+
+      canvas.onpointerdown = (e) => {
+        isDrawing = true;
+        const pos = getPos(e);
+        currentStroke = {
+          tool: currentTool,
+          color: currentColor,
+          size: (currentTool === 'highlighter') ? Math.max(16, currentSize * 3) : currentSize,
+          points: [pos]
+        };
+      };
+
+      canvas.onpointermove = (e) => {
+        if (!isDrawing || !currentStroke) return;
+        const pos = getPos(e);
+        currentStroke.points.push(pos);
+        drawSingleStroke(ctx, currentStroke);
+      };
+
+      const stopDrawing = () => {
+        if (isDrawing && currentStroke && currentStroke.points.length > 0) {
+          if (!pageStrokes[currentPageNum]) {
+            pageStrokes[currentPageNum] = [];
+          }
+          pageStrokes[currentPageNum].push(currentStroke);
+          redrawCurrentPageStrokes();
+        }
+        isDrawing = false;
+        currentStroke = null;
+      };
+
+      canvas.onpointerup = stopDrawing;
+      canvas.onpointerleave = stopDrawing;
+    }
+
+    function drawSingleStroke(ctx, stroke) {
+      if (!stroke || stroke.points.length < 2) return;
+      ctx.save();
+      ctx.beginPath();
+      ctx.moveTo(stroke.points[0].x, stroke.points[0].y);
+
+      for (let i = 1; i < stroke.points.length; i++) {
+        ctx.lineTo(stroke.points[i].x, stroke.points[i].y);
+      }
+
+      ctx.lineCap = 'round';
+      ctx.lineJoin = 'round';
+
+      if (stroke.tool === 'eraser') {
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.lineWidth = stroke.size * 2.5;
+        ctx.strokeStyle = 'rgba(0,0,0,1)';
+      } else if (stroke.tool === 'highlighter') {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.globalAlpha = 0.35;
+        ctx.lineWidth = stroke.size;
+        ctx.strokeStyle = stroke.color;
+      } else {
+        ctx.globalCompositeOperation = 'source-over';
+        ctx.lineWidth = stroke.size;
+        ctx.strokeStyle = stroke.color;
+      }
+
+      ctx.stroke();
+      ctx.restore();
+    }
+
+    function redrawCurrentPageStrokes() {
+      const canvas = document.getElementById('drawingCanvas');
+      const ctx = canvas.getContext('2d');
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      const strokes = pageStrokes[currentPageNum] || [];
+      strokes.forEach(s => drawSingleStroke(ctx, s));
+    }
+
+    function undoStroke() {
+      if (pageStrokes[currentPageNum] && pageStrokes[currentPageNum].length > 0) {
+        pageStrokes[currentPageNum].pop();
+        redrawCurrentPageStrokes();
+      }
+    }
+
+    function clearCurrentPageDrawings() {
+      if (confirm('Bu sayfadaki tüm çizimleri silmek istiyor musunuz?')) {
+        pageStrokes[currentPageNum] = [];
+        redrawCurrentPageStrokes();
+      }
+    }
+
+    // --- Save & Download Annotated PDF ---
+    async function downloadAnnotatedPDF() {
+      if (!currentViewerFile || !currentPdfBytes) return;
+      const btn = document.getElementById('saveAnnotatedBtn');
+      const btnText = document.getElementById('saveAnnotatedText');
+
+      try {
+        btn.disabled = true;
+        btnText.textContent = 'Çizimler Kaydediliyor...';
+
+        // Load original PDF with PDFLib
+        const pdfDocToExport = await PDFLib.PDFDocument.load(currentPdfBytes);
+        const totalPages = pdfDocToExport.getPageCount();
+
+        // Check if any drawings exist
+        const pagesWithDrawings = Object.keys(pageStrokes).filter(p => pageStrokes[p] && pageStrokes[p].length > 0);
+        
+        if (pagesWithDrawings.length === 0) {
+          alert('Henüz hiçbir sayfaya çizim yapmadınız.');
+          return;
+        }
+
+        // Create temporary canvas to rasterize drawings for each page
+        const tempCanvas = document.createElement('canvas');
+        const tempCtx = tempCanvas.getContext('2d');
+
+        for (const pageNumStr of pagesWithDrawings) {
+          const pIndex = parseInt(pageNumStr, 10) - 1;
+          if (pIndex < 0 || pIndex >= totalPages) continue;
+
+          const targetPage = pdfDocToExport.getPage(pIndex);
+          const { width, height } = targetPage.getSize();
+
+          // Set temp canvas to match PDF page dimensions in points
+          tempCanvas.width = width * 2;
+          tempCanvas.height = height * 2;
+          tempCtx.clearRect(0, 0, tempCanvas.width, tempCanvas.height);
+          tempCtx.scale(2, 2);
+
+          // Get original render dimensions to scale stroke coordinates properly
+          const originalPage = await pdfDoc.getPage(parseInt(pageNumStr, 10));
+          const originalViewport = originalPage.getViewport({ scale: currentScale });
+
+          const scaleX = width / originalViewport.width;
+          const scaleY = height / originalViewport.height;
+
+          // Draw scaled strokes onto tempCanvas
+          const strokes = pageStrokes[pageNumStr];
+          strokes.forEach(stroke => {
+            const scaledStroke = {
+              tool: stroke.tool,
+              color: stroke.color,
+              size: stroke.size * scaleX,
+              points: stroke.points.map(pt => ({ x: pt.x * scaleX, y: pt.y * scaleY }))
+            };
+            drawSingleStroke(tempCtx, scaledStroke);
+          });
+
+          // Convert drawing canvas to PNG
+          const pngDataUrl = tempCanvas.toDataURL('image/png');
+          const pngImageBytes = await fetch(pngDataUrl).then(res => res.arrayBuffer());
+          const embeddedPng = await pdfDocToExport.embedPng(pngImageBytes);
+
+          // Draw PNG image over the PDF page
+          targetPage.drawImage(embeddedPng, {
+            x: 0,
+            y: 0,
+            width: width,
+            height: height
+          });
+        }
+
+        const annotatedPdfBytes = await pdfDocToExport.save();
+        const blob = new Blob([annotatedPdfBytes], { type: 'application/pdf' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${currentViewerFile.title}_Cizimli.pdf`;
+        document.body.appendChild(a);
+        a.click();
+        document.body.removeChild(a);
+        setTimeout(() => URL.revokeObjectURL(url), 1000);
+
+      } catch (err) {
+        alert('PDF kaydedilirken hata: ' + err.message);
+      } finally {
+        btn.disabled = false;
+        btnText.textContent = 'Çizimli İndir';
+      }
+    }
+
+    // --- Standard Helpers ---
+    function openUploadModal() {
+      document.getElementById('uploadForm').reset();
+      document.getElementById('uploadModal').classList.remove('hidden');
+    }
+    function closeUploadModal() {
+      document.getElementById('uploadModal').classList.add('hidden');
+    }
+
+    function promptNewCourse() {
+      const name = prompt('Yeni ders adı:');
+      if (name && name.trim()) {
+        const tr = name.trim();
+        if (!courses.includes(tr)) {
+          courses.push(tr);
+          renderCategories();
+          document.getElementById('courseSelect').value = tr;
+        }
+      }
+    }
+
+    async function handleUpload(e) {
+      e.preventDefault();
+      const fileInput = document.getElementById('pdfFileInput');
+      const course = document.getElementById('courseSelect').value;
+      if (!fileInput.files.length) return;
+
+      const formData = new FormData();
+      formData.append('file', fileInput.files[0]);
+      formData.append('course', course);
+
+      const btn = document.getElementById('uploadSubmitBtn');
+      btn.disabled = true;
+      btn.textContent = 'Yükleniyor...';
+
+      try {
+        const res = await fetch('/api/upload', { method: 'POST', body: formData });
+        if (res.ok) {
+          closeUploadModal();
+          await loadData();
+        } else {
+          alert('Yükleme hatası!');
+        }
+      } catch (err) {
+        alert('Sunucu hatası: ' + err);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = 'Yükle';
+      }
+    }
+
+    function openRangeModal(course, filename, title, maxPages) {
+      currentModalFile = { course, filename, title, maxPages };
+      document.getElementById('rangeModalSub').textContent = title;
+      document.getElementById('rangeMaxPages').textContent = `Toplam: ${maxPages} sayfa`;
+      document.getElementById('pageRangeInput').value = `1-${Math.min(5, maxPages)}`;
+      document.getElementById('rangeModal').classList.remove('hidden');
+    }
+    function closeRangeModal() {
+      document.getElementById('rangeModal').classList.add('hidden');
+      currentModalFile = null;
+    }
+
+    function executeRangeDownload() {
+      if (!currentModalFile) return;
+      const pages = document.getElementById('pageRangeInput').value.trim();
+      if (!pages) return;
+      const url = `/api/download-range/${encodeURIComponent(currentModalFile.course)}/${encodeURIComponent(currentModalFile.filename)}?pages=${encodeURIComponent(pages)}`;
+      window.location.href = url;
+      closeRangeModal();
+    }
+
+    function formatBytes(bytes) {
+      if (!bytes || bytes === 0) return '0 B';
+      const k = 1024, sizes = ['B', 'KB', 'MB', 'GB'], i = Math.floor(Math.log(bytes) / Math.log(k));
+      return parseFloat((bytes / Math.pow(k, i)).toFixed(1)) + ' ' + sizes[i];
+    }
+    function escapeHtml(s) { return (s || '').replace(/[&<>"']/g, m => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#039;' }[m])); }
+
+    window.addEventListener('DOMContentLoaded', loadData);
+  </script>
+</body>
+</html>
