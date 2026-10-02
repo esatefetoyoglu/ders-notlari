@@ -404,11 +404,21 @@
     }
 
     let currentUser = { authenticated: false, username: null, role: 'guest' };
+    let terms = ['Tümü', '1. Sınıf 1. Dönem', '1. Sınıf 2. Dönem', '2. Sınıf 1. Dönem', '2. Sınıf 2. Dönem', '3. Sınıf 1. Dönem', '3. Sınıf 2. Dönem', '4. Sınıf 1. Dönem', '4. Sınıf 2. Dönem'];
+    let selectedTerm = '3. Sınıf 1. Dönem';
+    let selectedCourse = null;
     let courses = ['Tümü'];
+    let rawCourses = [];
+    let coursesMeta = [];
     let selectedCategory = 'Tümü';
     let files = [];
     let currentModalFile = null;
     let gateTab = 'login'; // 'login' or 'register'
+
+    // Backward compatibility aliases to prevent any ReferenceErrors
+    function renderCategories() { if (typeof renderTermPills === 'function') renderTermPills(); }
+    function renderFiles() { if (typeof renderContent === 'function') renderContent(); }
+    function handleDeletePdf(course, filename) { if (typeof handleDeleteFile === 'function') handleDeleteFile(course, filename); }
 
     // --- Viewer State ---
     let currentViewerFile = null;
@@ -440,34 +450,40 @@
       const welcomeScreen = document.getElementById('welcomeScreen');
       const adminUploadBtn = document.getElementById('adminUploadBtn');
       const headerUserLabel = document.getElementById('headerUserLabel');
+      const backupHeaderBtn = document.getElementById('adminBackupHeaderBtn');
 
-      if (currentUser.authenticated) {
-        welcomeScreen.classList.add('hidden');
+      if (currentUser && currentUser.authenticated) {
+        if (welcomeScreen) welcomeScreen.classList.add('hidden');
         const isAdmin = currentUser.role === 'admin';
-        headerUserLabel.textContent = (isAdmin ? '👑 ' : '👤 ') + currentUser.username;
+        if (headerUserLabel) {
+          headerUserLabel.textContent = (isAdmin ? '👑 ' : '👤 ') + currentUser.username;
+        }
 
-        const backupHeaderBtn = document.getElementById('adminBackupHeaderBtn');
         if (isAdmin) {
-          adminUploadBtn.classList.remove('hidden');
-          adminUploadBtn.classList.add('inline-flex');
+          if (adminUploadBtn) {
+            adminUploadBtn.classList.remove('hidden');
+            adminUploadBtn.classList.add('inline-flex');
+          }
           if (backupHeaderBtn) {
             backupHeaderBtn.classList.remove('hidden');
             backupHeaderBtn.classList.add('inline-flex');
           }
         } else {
-          adminUploadBtn.classList.add('hidden');
-          adminUploadBtn.classList.remove('inline-flex');
+          if (adminUploadBtn) {
+            adminUploadBtn.classList.add('hidden');
+            adminUploadBtn.classList.remove('inline-flex');
+          }
           if (backupHeaderBtn) {
             backupHeaderBtn.classList.add('hidden');
             backupHeaderBtn.classList.remove('inline-flex');
           }
         }
 
-        loadData();
-        initChatWebSocket();
-        loadChatHistory();
+        try { loadData(); } catch (e) { console.error('loadData error:', e); }
+        try { initChatWebSocket(); } catch (e) { console.error('ws error:', e); }
+        try { loadChatHistory(); } catch (e) { console.error('chat error:', e); }
       } else {
-        welcomeScreen.classList.remove('hidden');
+        if (welcomeScreen) welcomeScreen.classList.remove('hidden');
       }
     }
 
@@ -510,14 +526,18 @@
         const res = await fetch(endpoint, { method: 'POST', body: formData });
         const data = await res.json();
         if (res.ok) {
-          if (data.token) localStorage.setItem('session_token', data.token);
+          if (data.token) {
+            localStorage.setItem('session_token', data.token);
+          }
+          const welcomeScreen = document.getElementById('welcomeScreen');
+          if (welcomeScreen) welcomeScreen.classList.add('hidden');
           await checkAuth();
         } else {
           errorDiv.textContent = data.detail || 'İşlem başarısız oldu.';
           errorDiv.classList.remove('hidden');
         }
       } catch (err) {
-        errorDiv.textContent = 'Sunucu bağlantı hatası: ' + err;
+        errorDiv.textContent = 'Sunucu bağlantı hatası: ' + err.message;
         errorDiv.classList.remove('hidden');
       } finally {
         submitBtn.disabled = false;
@@ -1664,7 +1684,7 @@
       ]
     };
 
-    function loadGifCategory(cat) {
+    async function loadGifCategory(cat) {
       const pills = document.querySelectorAll('.gif-cat-btn');
       pills.forEach(p => {
         if (p.getAttribute('data-cat') === cat) {
@@ -1676,15 +1696,40 @@
 
       const grid = document.getElementById('gifGrid');
       if (!grid) return;
-      grid.innerHTML = '';
+
+      // Render instant curated list first
       const list = CURATED_GIFS[cat] || CURATED_GIFS['trend'];
+      renderGifItems(grid, list);
+
+      // If category is 'trend', fetch LIVE trending GIFs directly from Giphy.com!
+      if (cat === 'trend') {
+        try {
+          const res = await fetch('https://api.giphy.com/v1/gifs/trending?api_key=dc6zaTOxFJmzC&limit=24&rating=g');
+          if (res.ok) {
+            const data = await res.json();
+            if (data.data && data.data.length > 0) {
+              const liveGiphyTrending = data.data.map(item => ({
+                title: item.title || 'Giphy Trend',
+                url: item.images.fixed_height ? item.images.fixed_height.url : (item.images.fixed_height_small ? item.images.fixed_height_small.url : item.images.original.url)
+              }));
+              renderGifItems(grid, liveGiphyTrending);
+            }
+          }
+        } catch (e) {
+          console.log('Giphy trending live fetch note:', e);
+        }
+      }
+    }
+
+    function renderGifItems(grid, list) {
+      grid.innerHTML = '';
       list.forEach(g => {
         const card = document.createElement('div');
         card.className = 'relative rounded-xl overflow-hidden cursor-pointer group bg-slate-100 border border-slate-200/80 shadow-sm hover:shadow-md hover:border-indigo-400 transition-all duration-200 h-28 flex items-center justify-center';
         card.innerHTML = `
-          <img src="${g.url}" loading="lazy" alt="${g.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200">
+          <img src="${g.url}" loading="lazy" alt="${escapeHtml(g.title)}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200">
           <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent p-1.5 pt-4 transition flex items-center justify-between">
-            <span class="text-[10px] text-white font-medium truncate">${g.title}</span>
+            <span class="text-[10px] text-white font-medium truncate">${escapeHtml(g.title)}</span>
             <span class="text-[9px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded shadow-sm opacity-0 group-hover:opacity-100 transition">Gönder</span>
           </div>
         `;
@@ -2518,6 +2563,27 @@
         if (s1) s1.value = courseName;
         if (s2) s2.value = courseName;
       }, 50);
+    }
+
+    async function handleDeleteFile(course, filename) {
+      if (!confirm(`"${filename}" dosyasını kalıcı olarak silmek istediğinize emin misiniz?`)) return;
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`/api/delete/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`, {
+          method: 'DELETE',
+          headers
+        });
+        if (res.ok) {
+          alert(`✓ "${filename}" başarıyla silindi.`);
+          await loadData();
+        } else {
+          const data = await res.json();
+          alert('Silme başarısız: ' + (data.detail || 'Yetkisiz'));
+        }
+      } catch (e) {
+        alert('Hata: ' + e.message);
+      }
     }
 
     function openViewer(course, filename, title) {
