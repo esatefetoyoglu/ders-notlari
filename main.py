@@ -1,4 +1,5 @@
 import os
+import shutil
 import io
 import re
 import json
@@ -9,10 +10,16 @@ import hashlib
 import urllib.request
 from typing import List, Optional
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Form, UploadFile, File, HTTPException, Request, Response
-from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
+from fastapi.staticfiles import StaticFiles
+from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse, FileResponse
 from pypdf import PdfReader, PdfWriter
 
 app = FastAPI(title="Ders Notları & PDF Portalı")
+
+CHAT_MEDIA_DIR = "chat_media"
+os.makedirs(CHAT_MEDIA_DIR, exist_ok=True)
+app.mount("/chat_media", StaticFiles(directory=CHAT_MEDIA_DIR), name="chat_media")
+
 
 BASE_UPLOAD_DIR = "uploads"
 AUTH_FILE = "users.json"
@@ -22,34 +29,58 @@ os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
 
 DEFAULT_COURSES = ["Kadın Doğum Hemşireliği", "İç Hastalıkları", "Cerrahi Hastalıkları", "Sağlık Tanılaması", "Genel"]
 
+def init_courses():
+    if not os.path.exists(COURSES_FILE):
+        with open(COURSES_FILE, "w", encoding="utf-8") as f:
+            json.dump(DEFAULT_COURSES, f, ensure_ascii=False, indent=2)
+        for c in DEFAULT_COURSES:
+            os.makedirs(os.path.join(BASE_UPLOAD_DIR, c), exist_ok=True)
+
+init_courses()
+
 def get_all_courses() -> List[str]:
-    courses = set(DEFAULT_COURSES)
-    if os.path.exists(COURSES_FILE):
-        try:
-            with open(COURSES_FILE, "r", encoding="utf-8") as f:
-                courses.update(json.load(f))
-        except Exception:
-            pass
-    if os.path.exists(BASE_UPLOAD_DIR):
-        try:
-            for d in os.listdir(BASE_UPLOAD_DIR):
-                if os.path.isdir(os.path.join(BASE_UPLOAD_DIR, d)):
-                    courses.add(d)
-        except Exception:
-            pass
-    return sorted(list(courses))
+    init_courses()
+    try:
+        with open(COURSES_FILE, "r", encoding="utf-8") as f:
+            courses = json.load(f)
+            if isinstance(courses, list):
+                res = []
+                seen = set()
+                for c in courses:
+                    s = str(c).strip()
+                    if s and s not in seen:
+                        seen.add(s)
+                        res.append(s)
+                return res
+    except Exception as e:
+        print(f"Error loading courses: {e}")
+    return DEFAULT_COURSES.copy()
 
 def add_course_to_store(name: str) -> None:
     courses = get_all_courses()
-    if name not in courses:
-        courses.append(name)
-    with open(COURSES_FILE, "w", encoding="utf-8") as f:
-        json.dump(courses, f, ensure_ascii=False, indent=2)
-    os.makedirs(os.path.join(BASE_UPLOAD_DIR, name), exist_ok=True)
+    clean = name.strip()
+    if clean and clean not in courses:
+        courses.append(clean)
+        with open(COURSES_FILE, "w", encoding="utf-8") as f:
+            json.dump(courses, f, ensure_ascii=False, indent=2)
+    os.makedirs(os.path.join(BASE_UPLOAD_DIR, clean), exist_ok=True)
 
-# Ensure default course directories exist
-for c in DEFAULT_COURSES:
-    os.makedirs(os.path.join(BASE_UPLOAD_DIR, c), exist_ok=True)
+def remove_course_from_store(name: str) -> bool:
+    clean = name.strip()
+    courses = get_all_courses()
+    if clean in courses:
+        courses = [c for c in courses if c != clean]
+        with open(COURSES_FILE, "w", encoding="utf-8") as f:
+            json.dump(courses, f, ensure_ascii=False, indent=2)
+
+        c_path = os.path.join(BASE_UPLOAD_DIR, clean)
+        if os.path.exists(c_path):
+            try:
+                shutil.rmtree(c_path, ignore_errors=True)
+            except Exception as e:
+                print(f"Error removing course dir: {e}")
+        return True
+    return False
 
 # --- Authentication Helpers ---
 def hash_password(password: str, salt: str = None) -> tuple:
@@ -368,25 +399,36 @@ class RoomConnectionManager:
 room_manager = RoomConnectionManager()
 
 @app.delete("/api/courses")
+@app.post("/api/courses/delete")
 async def delete_course(request: Request, course_name: Optional[str] = None):
-    if not course_name:
-        course_name = request.query_params.get("course_name")
     user = get_current_user(request)
     if not user or user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin ders silebilir.")
         
-    courses = get_all_courses()
-    if course_name in courses:
-        courses.remove(course_name)
-        with open(COURSES_FILE, "w", encoding="utf-8") as f:
-            json.dump(courses, f, ensure_ascii=False, indent=2)
+    if not course_name:
+        course_name = request.query_params.get("course_name")
+        
+    if not course_name:
+        try:
+            body = await request.json()
+            if isinstance(body, dict):
+                course_name = body.get("course_name")
+        except Exception:
+            pass
+            
+    if not course_name:
+        try:
+            form = await request.form()
+            course_name = form.get("course_name")
+        except Exception:
+            pass
 
-    c_path = os.path.join(BASE_UPLOAD_DIR, course_name)
-    if os.path.exists(c_path):
-        import shutil
-        shutil.rmtree(c_path, ignore_errors=True)
+    if not course_name:
+        raise HTTPException(status_code=400, detail="Silinecek ders adı belirtilmedi.")
 
-    return {"status": "success", "message": f"'{course_name}' dersi silindi."}
+    course_name = course_name.strip()
+    remove_course_from_store(course_name)
+    return {"status": "success", "message": f"'{course_name}' dersi ve tüm dosyaları başarıyla silindi."}
 
 @app.get("/api/chat/messages")
 async def get_chat_messages(request: Request):
@@ -395,20 +437,70 @@ async def get_chat_messages(request: Request):
         raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
     return {"messages": load_chat_messages()}
 
-@app.post("/api/chat/send")
-async def send_chat_message(request: Request, text: str = Form(...)):
+@app.get("/api/chat/media/{filename}")
+async def get_chat_media(filename: str):
+    safe_name = os.path.basename(filename)
+    fpath = os.path.join(CHAT_MEDIA_DIR, safe_name)
+    if not os.path.exists(fpath):
+        raise HTTPException(status_code=404, detail="Medya bulunamadı")
+    return FileResponse(fpath)
+
+@app.post("/api/chat/upload")
+async def upload_chat_media(request: Request, file: UploadFile = File(...)):
     user = get_current_user(request)
     if not user:
         raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
-    clean_text = text.strip()
-    if not clean_text:
-        raise HTTPException(status_code=400, detail="Boş mesaj gönderilemez.")
+
+    orig_name = file.filename or "media"
+    ext = os.path.splitext(orig_name)[1].lower()
+
+    image_exts = {".jpg", ".jpeg", ".png", ".gif", ".webp", ".svg", ".bmp"}
+    video_exts = {".mp4", ".webm", ".mov", ".m4v", ".avi", ".mkv"}
+
+    if ext in image_exts:
+        media_type = "image"
+    elif ext in video_exts:
+        media_type = "video"
+    else:
+        raise HTTPException(status_code=400, detail="Yalnızca fotoğraf veya video yükleyebilirsiniz (JPG, PNG, GIF, WEBP, MP4, WEBM).")
+
+    safe_id = secrets.token_hex(8)
+    clean_orig = re.sub(r'[^a-zA-Z0-9_.-]', '', orig_name)
+    safe_fname = f"{safe_id}_{clean_orig}"
+    target_path = os.path.join(CHAT_MEDIA_DIR, safe_fname)
+
+    with open(target_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    file_url = f"/chat_media/{safe_fname}"
+    return {
+        "status": "success",
+        "file_url": file_url,
+        "media_type": media_type,
+        "filename": orig_name
+    }
+
+@app.post("/api/chat/send")
+async def send_chat_message(
+    request: Request,
+    text: Optional[str] = Form(""),
+    media_url: Optional[str] = Form(None),
+    media_type: Optional[str] = Form(None)
+):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+    clean_text = (text or "").strip()
+    if not clean_text and not media_url:
+        raise HTTPException(status_code=400, detail="Mesaj veya medya boş olamaz.")
     
     msg_obj = {
         "id": "msg_" + secrets.token_hex(6),
         "username": user["username"],
         "role": user.get("role", "user"),
         "text": clean_text,
+        "media_url": media_url or None,
+        "media_type": media_type or None,
         "time": time.strftime("%H:%M")
     }
     save_chat_message(msg_obj)
@@ -417,7 +509,6 @@ async def send_chat_message(request: Request, text: str = Form(...)):
 
 @app.websocket("/ws/room")
 async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
-    # Verify user from query token or cookie
     data = load_auth_data()
     username = None
     if token and token in data.get("sessions", {}):
@@ -437,14 +528,18 @@ async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
                 mtype = msg.get("type")
 
                 if mtype == "chat":
-                    text = msg.get("text", "").strip()
-                    if text:
+                    text = (msg.get("text") or "").strip()
+                    media_url = msg.get("media_url")
+                    media_type = msg.get("media_type")
+                    if text or media_url:
                         user_info = data.get("users", {}).get(username, {})
                         msg_obj = {
                             "id": "msg_" + secrets.token_hex(6),
                             "username": username,
                             "role": user_info.get("role", "user"),
                             "text": text,
+                            "media_url": media_url or None,
+                            "media_type": media_type or None,
                             "time": time.strftime("%H:%M")
                         }
                         save_chat_message(msg_obj)
