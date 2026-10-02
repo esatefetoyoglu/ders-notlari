@@ -442,6 +442,8 @@
         }
 
         loadData();
+        initChatWebSocket();
+        loadChatHistory();
       } else {
         welcomeScreen.classList.remove('hidden');
       }
@@ -561,6 +563,386 @@
       }
     }
 
+    
+    // ==================== DERS SİLME (ADMIN) ====================
+    async function handleDeleteCourse(courseName) {
+      if (!confirm(`"${courseName}" dersini ve içindeki TÜM dosyaları kalıcı olarak silmek istediğinize emin misiniz?`)) {
+        return;
+      }
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`/api/courses?course_name=${encodeURIComponent(courseName)}`, {
+          method: 'DELETE',
+          headers
+        });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`✓ "${courseName}" dersi başarıyla silindi.`);
+          courses = courses.filter(c => c !== courseName);
+          if (selectedCategory === courseName) selectedCategory = 'Tümü';
+          renderCategories();
+          populateUploadSelects();
+          await loadData();
+        } else {
+          alert('Silme başarısız: ' + (data.detail || 'Yetkisiz'));
+        }
+      } catch (err) {
+        alert('Hata: ' + err);
+      }
+    }
+
+    // ==================== CANLI SOHBET & SESLİ ODA (WEBSOCKET & WEBRTC) ====================
+    let isChatDrawerOpen = false;
+    let chatMode = 'text'; // 'text' or 'voice'
+    let chatWs = null;
+    let localStream = null;
+    let isInVoice = false;
+    let isMuted = false;
+    let onlineUsersList = [];
+    let voiceUsersList = [];
+    let peerConnections = {}; // username -> RTCPeerConnection
+
+    const rtcConfig = {
+      iceServers: [
+        { urls: 'stun:stun.l.google.com:19302' },
+        { urls: 'stun:stun1.l.google.com:19302' }
+      ]
+    };
+
+    function toggleChatDrawer() {
+      const drawer = document.getElementById('chatDrawer');
+      isChatDrawerOpen = !isChatDrawerOpen;
+      if (isChatDrawerOpen) {
+        drawer.classList.remove('translate-x-full');
+        loadChatHistory();
+        scrollToBottom();
+      } else {
+        drawer.classList.add('translate-x-full');
+      }
+    }
+
+    function switchChatMode(mode) {
+      chatMode = mode;
+      const tabText = document.getElementById('tabChatText');
+      const tabVoice = document.getElementById('tabChatVoice');
+      const panelText = document.getElementById('textChatPanel');
+      const panelVoice = document.getElementById('voiceChatPanel');
+
+      if (mode === 'text') {
+        tabText.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition-all bg-white text-indigo-600 shadow-sm flex items-center justify-center gap-1.5';
+        tabVoice.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition-all text-slate-500 hover:text-slate-900 flex items-center justify-center gap-1.5';
+        panelText.classList.remove('hidden');
+        panelVoice.classList.add('hidden');
+        scrollToBottom();
+      } else {
+        tabVoice.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition-all bg-white text-indigo-600 shadow-sm flex items-center justify-center gap-1.5';
+        tabText.className = 'flex-1 py-2 text-xs font-bold rounded-xl transition-all text-slate-500 hover:text-slate-900 flex items-center justify-center gap-1.5';
+        panelVoice.classList.remove('hidden');
+        panelText.classList.add('hidden');
+      }
+    }
+
+    function initChatWebSocket() {
+      const token = localStorage.getItem('session_token');
+      if (!token || !currentUser.authenticated) return;
+
+      const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+      const wsUrl = `${protocol}//${window.location.host}/ws/room?token=${encodeURIComponent(token)}`;
+
+      try {
+        chatWs = new WebSocket(wsUrl);
+
+        chatWs.onmessage = async (event) => {
+          try {
+            const data = jsonParseSafe(event.data);
+            if (!data) return;
+
+            if (data.type === 'chat_message') {
+              appendChatMessage(data.message);
+            } else if (data.type === 'room_state') {
+              onlineUsersList = data.online_users || [];
+              voiceUsersList = data.voice_users || [];
+              updateVoiceUI();
+            } else if (data.type === 'webrtc_offer') {
+              handleRtcOffer(data.sender, data.offer);
+            } else if (data.type === 'webrtc_answer') {
+              handleRtcAnswer(data.sender, data.answer);
+            } else if (data.type === 'webrtc_ice') {
+              handleRtcIce(data.sender, data.candidate);
+            }
+          } catch (e) {
+            console.error('WS parse error:', e);
+          }
+        };
+
+        chatWs.onclose = () => {
+          // Reconnect after 3 seconds if still authenticated
+          if (currentUser.authenticated) {
+            setTimeout(initChatWebSocket, 3000);
+          }
+        };
+      } catch (e) {
+        console.error('WebSocket connection error:', e);
+      }
+    }
+
+    async function loadChatHistory() {
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch('/api/chat/messages', { headers });
+        if (res.ok) {
+          const data = await res.json();
+          renderChatMessages(data.messages || []);
+        }
+      } catch (e) {}
+    }
+
+    function renderChatMessages(messages) {
+      const list = document.getElementById('chatMessageList');
+      list.innerHTML = '';
+      messages.forEach(msg => appendChatMessage(msg, false));
+      scrollToBottom();
+    }
+
+    function appendChatMessage(msg, shouldScroll = true) {
+      const list = document.getElementById('chatMessageList');
+      const isMe = currentUser && msg.username === currentUser.username;
+      const isAdmin = msg.role === 'admin';
+
+      const div = document.createElement('div');
+      div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 animate-in fade-in duration-100`;
+
+      div.innerHTML = `
+        <div class="flex items-center gap-1.5 text-[11px] text-slate-400">
+          <span class="font-bold ${isAdmin ? 'text-amber-600' : 'text-slate-700'}">
+            ${isAdmin ? '👑 ' : ''}${escapeHtml(msg.username)}
+          </span>
+          <span>•</span>
+          <span>${msg.time || ''}</span>
+        </div>
+        <div class="max-w-[85%] px-3.5 py-2 rounded-2xl text-xs leading-relaxed shadow-sm break-words ${
+          isMe ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'
+        }">
+          ${escapeHtml(msg.text)}
+        </div>
+      `;
+
+      list.appendChild(div);
+      if (shouldScroll) scrollToBottom();
+    }
+
+    function scrollToBottom() {
+      const list = document.getElementById('chatMessageList');
+      if (list) list.scrollTop = list.scrollHeight;
+    }
+
+    async function handleSendChatMessage(e) {
+      e.preventDefault();
+      const input = document.getElementById('chatInputText');
+      const text = input.value.trim();
+      if (!text) return;
+
+      input.value = '';
+
+      // Send via WS if open
+      if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+        chatWs.send(JSON.stringify({ type: 'chat', text }));
+      } else {
+        // Fallback HTTP
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const formData = new FormData();
+        formData.append('text', text);
+        await fetch('/api/chat/send', { method: 'POST', body: formData, headers });
+      }
+    }
+
+    // --- WebRTC Voice Room Functions ---
+    async function toggleVoiceConnection() {
+      if (isInVoice) {
+        leaveVoiceRoom();
+      } else {
+        await joinVoiceRoom();
+      }
+    }
+
+    async function joinVoiceRoom() {
+      try {
+        localStream = await navigator.mediaDevices.getUserMedia({ audio: true, video: false });
+        isInVoice = true;
+
+        if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+          chatWs.send(JSON.stringify({ type: 'voice_join' }));
+        }
+
+        document.getElementById('voiceJoinBtn').className = 'px-5 py-2.5 bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold rounded-xl shadow transition-all active:scale-95 flex items-center gap-1.5';
+        document.getElementById('voiceJoinBtn').textContent = 'Odadan Ayrıl';
+        document.getElementById('voiceMuteBtn').classList.remove('hidden');
+        document.getElementById('voiceIconCircle').className = 'w-16 h-16 rounded-full bg-emerald-100 text-emerald-600 flex items-center justify-center mx-auto text-2xl transition-all ring-4 ring-emerald-200 animate-pulse';
+        document.getElementById('voiceStatusTitle').textContent = 'Sesli Odaya Bağlandınız';
+        document.getElementById('voiceStatusDesc').textContent = 'Mikrofonunuz aktif, arkadaşlarınız sizi duyabilir.';
+
+        // Connect to existing voice members
+        voiceUsersList.forEach(user => {
+          if (user !== currentUser.username) {
+            initiatePeerConnection(user);
+          }
+        });
+      } catch (err) {
+        alert('Mikrofon erişimi sağlanamadı: ' + err.message);
+      }
+    }
+
+    function leaveVoiceRoom() {
+      if (localStream) {
+        localStream.getTracks().forEach(t => t.stop());
+        localStream = null;
+      }
+
+      Object.values(peerConnections).forEach(pc => pc.close());
+      peerConnections = {};
+
+      isInVoice = false;
+
+      if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+        chatWs.send(JSON.stringify({ type: 'voice_leave' }));
+      }
+
+      document.getElementById('voiceJoinBtn').className = 'px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow transition-all active:scale-95 flex items-center gap-1.5';
+      document.getElementById('voiceJoinBtn').textContent = 'Odaya Katıl';
+      document.getElementById('voiceMuteBtn').classList.add('hidden');
+      document.getElementById('voiceIconCircle').className = 'w-16 h-16 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto text-2xl transition-all';
+      document.getElementById('voiceStatusTitle').textContent = 'Sesli Sohbet Odası';
+      document.getElementById('voiceStatusDesc').textContent = 'Arkadaşlarınla konuşmak için odaya bağlan.';
+    }
+
+    function toggleMicrophoneMute() {
+      if (!localStream) return;
+      const audioTrack = localStream.getAudioTracks()[0];
+      if (audioTrack) {
+        audioTrack.enabled = !audioTrack.enabled;
+        isMuted = !audioTrack.enabled;
+        document.getElementById('muteBtnIcon').textContent = isMuted ? '🔇' : '🎤';
+        document.getElementById('muteBtnText').textContent = isMuted ? 'Sesi Aç' : 'Sustur';
+        document.getElementById('voiceMuteBtn').className = isMuted 
+          ? 'px-4 py-2.5 bg-rose-100 text-rose-700 hover:bg-rose-200 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5'
+          : 'px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5';
+      }
+    }
+
+    function updateVoiceUI() {
+      const badge = document.getElementById('voiceCountBadge');
+      const tabBadge = document.getElementById('voiceTabBadge');
+      const list = document.getElementById('voiceUserList');
+
+      const count = voiceUsersList.length;
+      tabBadge.textContent = count;
+      if (count > 0) {
+        badge.textContent = count;
+        badge.classList.remove('hidden');
+      } else {
+        badge.classList.add('hidden');
+      }
+
+      if (count === 0) {
+        list.innerHTML = `<p class="text-xs text-slate-400 italic">Şu an sesli odada kimse yok.</p>`;
+        return;
+      }
+
+      list.innerHTML = voiceUsersList.map(u => {
+        const isMe = u === currentUser.username;
+        return `
+          <div class="flex items-center justify-between p-2.5 bg-white rounded-xl border border-slate-200 shadow-sm">
+            <div class="flex items-center gap-2">
+              <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+              <span class="text-xs font-bold text-slate-800">${escapeHtml(u)}</span>
+              ${isMe ? '<span class="text-[10px] text-indigo-600 bg-indigo-50 px-1.5 py-0.5 rounded font-bold">Sen</span>' : ''}
+            </div>
+            <span class="text-[11px] text-emerald-600 font-semibold">Aktif</span>
+          </div>
+        `;
+      }).join('');
+    }
+
+    // WebRTC Peer Connection Helper
+    function createPeerConnection(targetUsername) {
+      if (peerConnections[targetUsername]) return peerConnections[targetUsername];
+      const pc = new RTCPeerConnection(rtcConfig);
+
+      if (localStream) {
+        localStream.getTracks().forEach(track => pc.addTrack(track, localStream));
+      }
+
+      pc.onicecandidate = (event) => {
+        if (event.candidate && chatWs && chatWs.readyState === WebSocket.OPEN) {
+          chatWs.send(JSON.stringify({
+            type: 'webrtc_ice',
+            target: targetUsername,
+            candidate: event.candidate
+          }));
+        }
+      };
+
+      pc.ontrack = (event) => {
+        const remoteAudio = new Audio();
+        remoteAudio.srcObject = event.streams[0];
+        remoteAudio.autoplay = true;
+      };
+
+      peerConnections[targetUsername] = pc;
+      return pc;
+    }
+
+    async function initiatePeerConnection(targetUsername) {
+      const pc = createPeerConnection(targetUsername);
+      const offer = await pc.createOffer();
+      await pc.setLocalDescription(offer);
+      if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+        chatWs.send(JSON.stringify({
+          type: 'webrtc_offer',
+          target: targetUsername,
+          offer: offer
+        }));
+      }
+    }
+
+    async function handleRtcOffer(sender, offer) {
+      if (!isInVoice) return;
+      const pc = createPeerConnection(sender);
+      await pc.setRemoteDescription(new RTCSessionDescription(offer));
+      const answer = await pc.createAnswer();
+      await pc.setLocalDescription(answer);
+      if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+        chatWs.send(JSON.stringify({
+          type: 'webrtc_answer',
+          target: sender,
+          answer: answer
+        }));
+      }
+    }
+
+    async function handleRtcAnswer(sender, answer) {
+      const pc = peerConnections[sender];
+      if (pc) {
+        await pc.setRemoteDescription(new RTCSessionDescription(answer));
+      }
+    }
+
+    async function handleRtcIce(sender, candidate) {
+      const pc = peerConnections[sender];
+      if (pc && candidate) {
+        try {
+          await pc.addIceCandidate(new RTCIceCandidate(candidate));
+        } catch (e) {}
+      }
+    }
+
+    function jsonParseSafe(str) {
+      try { return JSON.parse(str); } catch (e) { return null; }
+    }
+
     function handleGooglePrompt() {
       alert('Google ile Giriş yapabilmek için Google Cloud Console üzerinden ücretsiz bir "Client ID" tanımlanması gerekir. Şimdilik kullanıcı adı ve şifreyle hemen kayıt olup giriş yapabilirsiniz!');
     }
@@ -603,17 +985,34 @@
       container.innerHTML = '';
 
       courses.forEach(cat => {
-        const btn = document.createElement('button');
+        const btn = document.createElement('div');
         const isActive = cat === selectedCategory;
-        btn.className = `px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all ${
+        const isAdmin = currentUser && currentUser.role === 'admin';
+
+        btn.className = `inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
           isActive ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
         }`;
-        btn.textContent = cat;
+        
+        btn.innerHTML = `<span>${escapeHtml(cat)}</span>`;
         btn.onclick = () => {
           selectedCategory = cat;
           renderCategories();
           renderFiles();
         };
+
+        // If admin and not 'Tümü', show delete course button
+        if (isAdmin && cat !== 'Tümü') {
+          const delBtn = document.createElement('button');
+          delBtn.title = `"${cat}" Dersini Sil (Admin)`;
+          delBtn.className = `ml-1 hover:text-rose-500 font-bold p-0.5 rounded transition-all ${isActive ? 'text-indigo-200 hover:text-white' : 'text-slate-400'}`;
+          delBtn.innerHTML = `&times;`;
+          delBtn.onclick = (e) => {
+            e.stopPropagation();
+            handleDeleteCourse(cat);
+          };
+          btn.appendChild(delBtn);
+        }
+
         container.appendChild(btn);
       });
       populateUploadSelects();
@@ -1194,5 +1593,98 @@
 
     window.addEventListener('DOMContentLoaded', async () => { await checkAuth(); await initGoogleAuth(); });
   </script>
+
+  <!-- ==================== FLOATING CHAT & VOICE TOGGLE ==================== -->
+  <button id="chatToggleBtn" onclick="toggleChatDrawer()" class="fixed bottom-6 right-6 z-40 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs px-4 py-3.5 rounded-2xl shadow-xl shadow-slate-400 flex items-center gap-2.5 transition-all hover:scale-105 active:scale-95">
+    <span class="relative flex h-2.5 w-2.5">
+      <span id="chatPulseRing" class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+      <span class="relative inline-flex rounded-full h-2.5 w-2.5 bg-emerald-500"></span>
+    </span>
+    <span>Sohbet & Sesli Oda</span>
+    <span id="voiceCountBadge" class="hidden bg-emerald-500 text-white text-[10px] px-1.5 py-0.5 rounded-full font-bold">0</span>
+  </button>
+
+  <!-- ==================== SLIDE-OVER CHAT & VOICE DRAWER ==================== -->
+  <div id="chatDrawer" class="fixed inset-y-0 right-0 z-50 w-full sm:w-[400px] bg-white border-l border-slate-200 shadow-2xl flex flex-col transform translate-x-full transition-transform duration-300 ease-in-out">
+    <!-- Drawer Header -->
+    <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
+      <div class="flex items-center gap-2.5">
+        <div class="w-8 h-8 rounded-xl bg-indigo-600 flex items-center justify-center font-bold text-sm">💬</div>
+        <div>
+          <h3 class="font-bold text-sm text-slate-100">Öğrenci Çalışma Odası</h3>
+          <p class="text-[11px] text-emerald-400 font-medium">Canlı Yazılı & Sesli İletişim</p>
+        </div>
+      </div>
+      <button onclick="toggleChatDrawer()" class="text-slate-400 hover:text-white p-1.5 rounded-xl hover:bg-slate-800 transition-all">
+        <svg class="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M6 18L18 6M6 6l12 12"></path></svg>
+      </button>
+    </div>
+
+    <!-- Mode Tabs: Yazılı / Sesli -->
+    <div class="flex border-b border-slate-100 bg-slate-50 p-1">
+      <button id="tabChatText" onclick="switchChatMode('text')" class="flex-1 py-2 text-xs font-bold rounded-xl transition-all bg-white text-indigo-600 shadow-sm flex items-center justify-center gap-1.5">
+        <span>💬 Yazılı Sohbet</span>
+      </button>
+      <button id="tabChatVoice" onclick="switchChatMode('voice')" class="flex-1 py-2 text-xs font-bold rounded-xl transition-all text-slate-500 hover:text-slate-900 flex items-center justify-center gap-1.5">
+        <span>🎙️ Sesli Oda</span>
+        <span id="voiceTabBadge" class="bg-indigo-100 text-indigo-700 text-[10px] px-1.5 py-0.2 rounded-full font-bold">0</span>
+      </button>
+    </div>
+
+    <!-- TAB 1: Yazılı Sohbet Paneli -->
+    <div id="textChatPanel" class="flex-1 flex flex-col min-h-0 bg-white">
+      <!-- Message List -->
+      <div id="chatMessageList" class="flex-1 overflow-y-auto p-4 space-y-3 custom-scrollbar">
+        <!-- Dynamic messages -->
+      </div>
+
+      <!-- Input Bar -->
+      <form id="chatForm" onsubmit="handleSendChatMessage(event)" class="p-3 border-t border-slate-100 bg-slate-50 flex items-center gap-2">
+        <input type="text" id="chatInputText" placeholder="Mesajınızı yazın..." 
+          class="flex-1 px-3.5 py-2.5 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500">
+        <button type="submit" class="bg-indigo-600 hover:bg-indigo-700 text-white font-bold px-3.5 py-2.5 rounded-xl text-xs shadow-sm transition-all active:scale-95">
+          Gönder
+        </button>
+      </form>
+    </div>
+
+    <!-- TAB 2: Sesli Sohbet Paneli -->
+    <div id="voiceChatPanel" class="flex-1 flex flex-col min-h-0 p-5 space-y-5 hidden bg-slate-50 overflow-y-auto">
+      <!-- Voice Status Card -->
+      <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm space-y-4 text-center">
+        <div id="voiceIconCircle" class="w-16 h-16 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center mx-auto text-2xl transition-all">
+          🎙️
+        </div>
+        <div>
+          <h4 id="voiceStatusTitle" class="font-bold text-slate-800 text-sm">Sesli Sohbet Odası</h4>
+          <p id="voiceStatusDesc" class="text-xs text-slate-400 mt-0.5">Arkadaşlarınla konuşmak için odaya bağlan.</p>
+        </div>
+
+        <!-- Voice Action Buttons -->
+        <div class="flex items-center justify-center gap-2.5">
+          <button id="voiceJoinBtn" onclick="toggleVoiceConnection()" class="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold rounded-xl shadow transition-all active:scale-95 flex items-center gap-1.5">
+            Odaya Katıl
+          </button>
+          <button id="voiceMuteBtn" onclick="toggleMicrophoneMute()" class="hidden px-4 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition-all active:scale-95 flex items-center gap-1.5">
+            <span id="muteBtnIcon">🎤</span>
+            <span id="muteBtnText">Sustur</span>
+          </button>
+        </div>
+      </div>
+
+      <!-- Active Voice Users List -->
+      <div class="space-y-2.5">
+        <h5 class="text-xs font-bold text-slate-600 uppercase tracking-wider">Odada Olanlar</h5>
+        <div id="voiceUserList" class="space-y-2">
+          <p class="text-xs text-slate-400 italic">Şu an sesli odada kimse yok.</p>
+        </div>
+      </div>
+
+      <div class="bg-indigo-50/80 border border-indigo-100 rounded-xl p-3 text-[11px] text-indigo-900 leading-relaxed">
+        💡 <b>Nasıl Çalışır?</b> Sesli sohbet tarayıcınızın mikrofonunu kullanarak arkadaşlarınızla doğrudan eşten-eşe (WebRTC) güvenli bağlantı kurar.
+      </div>
+    </div>
+  </div>
+
 </body>
 </html>

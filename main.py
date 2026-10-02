@@ -8,7 +8,7 @@ import secrets
 import hashlib
 import urllib.request
 from typing import List, Optional
-from fastapi import FastAPI, Form, UploadFile, File, HTTPException, Request, Response
+from fastapi import FastAPI, WebSocket, WebSocketDisconnect, Form, UploadFile, File, HTTPException, Request, Response
 from fastapi.responses import HTMLResponse, StreamingResponse, JSONResponse
 from pypdf import PdfReader, PdfWriter
 
@@ -296,6 +296,184 @@ async def list_files(request: Request):
                     "page_count": page_count
                 })
     return {"courses": courses, "files": data}
+
+
+# --- Chat & Real-Time Voice Signaling ---
+CHAT_FILE = "chat_messages.json"
+
+def load_chat_messages():
+    if not os.path.exists(CHAT_FILE):
+        return []
+    try:
+        with open(CHAT_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception:
+        return []
+
+def save_chat_message(msg_obj):
+    msgs = load_chat_messages()
+    msgs.append(msg_obj)
+    if len(msgs) > 100:
+        msgs = msgs[-100:]
+    with open(CHAT_FILE, "w", encoding="utf-8") as f:
+        json.dump(msgs, f, ensure_ascii=False, indent=2)
+    return msgs
+
+class RoomConnectionManager:
+    def __init__(self):
+        # Maps websocket -> {"username": str, "in_voice": bool}
+        self.connections: dict = {}
+
+    async def connect(self, ws: WebSocket, username: str):
+        await ws.accept()
+        self.connections[ws] = {"username": username, "in_voice": False}
+        await self.broadcast_user_list()
+
+    def disconnect(self, ws: WebSocket):
+        if ws in self.connections:
+            del self.connections[ws]
+
+    def get_online_users(self):
+        return [info["username"] for info in self.connections.values()]
+
+    def get_voice_users(self):
+        return [info["username"] for info in self.connections.values() if info["in_voice"]]
+
+    async def broadcast_user_list(self):
+        msg = {
+            "type": "room_state",
+            "online_users": self.get_online_users(),
+            "voice_users": self.get_voice_users()
+        }
+        await self.broadcast(msg)
+
+    async def broadcast(self, message: dict):
+        dead = []
+        for ws in list(self.connections.keys()):
+            try:
+                await ws.send_text(json.dumps(message))
+            except Exception:
+                dead.append(ws)
+        for ws in dead:
+            self.disconnect(ws)
+
+    async def send_to_user(self, target_username: str, message: dict):
+        for ws, info in self.connections.items():
+            if info["username"] == target_username:
+                try:
+                    await ws.send_text(json.dumps(message))
+                except Exception:
+                    self.disconnect(ws)
+
+room_manager = RoomConnectionManager()
+
+@app.delete("/api/courses")
+async def delete_course(request: Request, course_name: Optional[str] = None):
+    if not course_name:
+        course_name = request.query_params.get("course_name")
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin ders silebilir.")
+        
+    courses = get_all_courses()
+    if course_name in courses:
+        courses.remove(course_name)
+        with open(COURSES_FILE, "w", encoding="utf-8") as f:
+            json.dump(courses, f, ensure_ascii=False, indent=2)
+
+    c_path = os.path.join(BASE_UPLOAD_DIR, course_name)
+    if os.path.exists(c_path):
+        import shutil
+        shutil.rmtree(c_path, ignore_errors=True)
+
+    return {"status": "success", "message": f"'{course_name}' dersi silindi."}
+
+@app.get("/api/chat/messages")
+async def get_chat_messages(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+    return {"messages": load_chat_messages()}
+
+@app.post("/api/chat/send")
+async def send_chat_message(request: Request, text: str = Form(...)):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+    clean_text = text.strip()
+    if not clean_text:
+        raise HTTPException(status_code=400, detail="Boş mesaj gönderilemez.")
+    
+    msg_obj = {
+        "id": "msg_" + secrets.token_hex(6),
+        "username": user["username"],
+        "role": user.get("role", "user"),
+        "text": clean_text,
+        "time": time.strftime("%H:%M")
+    }
+    save_chat_message(msg_obj)
+    await room_manager.broadcast({"type": "chat_message", "message": msg_obj})
+    return {"status": "success", "message": msg_obj}
+
+@app.websocket("/ws/room")
+async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
+    # Verify user from query token or cookie
+    data = load_auth_data()
+    username = None
+    if token and token in data.get("sessions", {}):
+        s_info = data["sessions"][token]
+        username = s_info if isinstance(s_info, str) else s_info.get("username")
+    
+    if not username:
+        await websocket.close(code=4001)
+        return
+
+    await room_manager.connect(websocket, username)
+    try:
+        while True:
+            raw_text = await websocket.receive_text()
+            try:
+                msg = json.loads(raw_text)
+                mtype = msg.get("type")
+
+                if mtype == "chat":
+                    text = msg.get("text", "").strip()
+                    if text:
+                        user_info = data.get("users", {}).get(username, {})
+                        msg_obj = {
+                            "id": "msg_" + secrets.token_hex(6),
+                            "username": username,
+                            "role": user_info.get("role", "user"),
+                            "text": text,
+                            "time": time.strftime("%H:%M")
+                        }
+                        save_chat_message(msg_obj)
+                        await room_manager.broadcast({"type": "chat_message", "message": msg_obj})
+
+                elif mtype == "voice_join":
+                    if websocket in room_manager.connections:
+                        room_manager.connections[websocket]["in_voice"] = True
+                        await room_manager.broadcast_user_list()
+
+                elif mtype == "voice_leave":
+                    if websocket in room_manager.connections:
+                        room_manager.connections[websocket]["in_voice"] = False
+                        await room_manager.broadcast_user_list()
+
+                elif mtype in ["webrtc_offer", "webrtc_answer", "webrtc_ice"]:
+                    target = msg.get("target")
+                    if target:
+                        msg["sender"] = username
+                        await room_manager.send_to_user(target, msg)
+
+            except Exception as e:
+                print("WS process error:", e)
+    except WebSocketDisconnect:
+        room_manager.disconnect(websocket)
+        await room_manager.broadcast_user_list()
+    except Exception:
+        room_manager.disconnect(websocket)
+        await room_manager.broadcast_user_list()
 
 @app.post("/api/courses")
 async def create_course(request: Request, course_name: str = Form(...)):
