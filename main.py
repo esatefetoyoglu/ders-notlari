@@ -53,51 +53,96 @@ if DATA_DIR != ".":
             except Exception:
                 pass
 
-DEFAULT_COURSES = ["Kadın Doğum Hemşireliği", "İç Hastalıkları", "Cerrahi Hastalıkları", "Sağlık Tanılaması", "Genel"]
+DEFAULT_TERMS = [
+    "1. Sınıf 1. Dönem",
+    "1. Sınıf 2. Dönem",
+    "2. Sınıf 1. Dönem",
+    "2. Sınıf 2. Dönem",
+    "3. Sınıf 1. Dönem",
+    "3. Sınıf 2. Dönem",
+    "4. Sınıf 1. Dönem",
+    "4. Sınıf 2. Dönem"
+]
 
-def init_courses():
+DEFAULT_COURSE_TERMS = {
+    "Anatomi ve Fizyoloji": "1. Sınıf 1. Dönem",
+    "Genel": "1. Sınıf 1. Dönem",
+    "İç Hastalıkları": "2. Sınıf 1. Dönem",
+    "Sağlık Tanılaması": "2. Sınıf 1. Dönem",
+    "Cerrahi Hastalıkları": "2. Sınıf 2. Dönem",
+    "Kadın Doğum Hemşireliği": "3. Sınıf 1. Dönem",
+    "Yeni Test Dersi": "3. Sınıf 1. Dönem"
+}
+
+def load_courses_data() -> dict:
     if not os.path.exists(COURSES_FILE):
+        data = {
+            "terms": DEFAULT_TERMS.copy(),
+            "courses": DEFAULT_COURSE_TERMS.copy()
+        }
         with open(COURSES_FILE, "w", encoding="utf-8") as f:
-            json.dump(DEFAULT_COURSES, f, ensure_ascii=False, indent=2)
-        for c in DEFAULT_COURSES:
+            json.dump(data, f, ensure_ascii=False, indent=2)
+        for c in data["courses"].keys():
             os.makedirs(os.path.join(BASE_UPLOAD_DIR, c), exist_ok=True)
+        return data
 
-init_courses()
-
-def get_all_courses() -> List[str]:
-    init_courses()
     try:
         with open(COURSES_FILE, "r", encoding="utf-8") as f:
-            courses = json.load(f)
-            if isinstance(courses, list):
-                res = []
-                seen = set()
-                for c in courses:
-                    s = str(c).strip()
-                    if s and s not in seen:
-                        seen.add(s)
-                        res.append(s)
-                return res
+            raw = json.load(f)
+            if isinstance(raw, list):
+                # Migrate old list format to dictionary
+                c_dict = {}
+                for c in raw:
+                    c_dict[c] = DEFAULT_COURSE_TERMS.get(c, "3. Sınıf 1. Dönem")
+                data = {
+                    "terms": DEFAULT_TERMS.copy(),
+                    "courses": c_dict
+                }
+                save_courses_data(data)
+                return data
+            elif isinstance(raw, dict):
+                if "terms" not in raw or not raw["terms"]:
+                    raw["terms"] = DEFAULT_TERMS.copy()
+                if "courses" not in raw:
+                    raw["courses"] = {}
+                return raw
     except Exception as e:
-        print(f"Error loading courses: {e}")
-    return DEFAULT_COURSES.copy()
+        print(f"Error loading courses data: {e}")
 
-def add_course_to_store(name: str) -> None:
-    courses = get_all_courses()
+    return {"terms": DEFAULT_TERMS.copy(), "courses": DEFAULT_COURSE_TERMS.copy()}
+
+def save_courses_data(data: dict):
+    with open(COURSES_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, ensure_ascii=False, indent=2)
+
+def get_all_terms() -> List[str]:
+    data = load_courses_data()
+    return data.get("terms", DEFAULT_TERMS)
+
+def get_all_courses() -> List[str]:
+    data = load_courses_data()
+    return sorted(list(data.get("courses", {}).keys()))
+
+def get_course_term(name: str) -> str:
+    data = load_courses_data()
+    return data.get("courses", {}).get(name, "3. Sınıf 1. Dönem")
+
+def add_course_to_store(name: str, term: Optional[str] = None) -> None:
+    data = load_courses_data()
     clean = name.strip()
-    if clean and clean not in courses:
-        courses.append(clean)
-        with open(COURSES_FILE, "w", encoding="utf-8") as f:
-            json.dump(courses, f, ensure_ascii=False, indent=2)
-    os.makedirs(os.path.join(BASE_UPLOAD_DIR, clean), exist_ok=True)
+    if not term or term == "Tümü":
+        term = "3. Sınıf 1. Dönem"
+    if clean:
+        data.setdefault("courses", {})[clean] = term.strip()
+        save_courses_data(data)
+        os.makedirs(os.path.join(BASE_UPLOAD_DIR, clean), exist_ok=True)
 
 def remove_course_from_store(name: str) -> bool:
+    data = load_courses_data()
     clean = name.strip()
-    courses = get_all_courses()
-    if clean in courses:
-        courses = [c for c in courses if c != clean]
-        with open(COURSES_FILE, "w", encoding="utf-8") as f:
-            json.dump(courses, f, ensure_ascii=False, indent=2)
+    if clean in data.get("courses", {}):
+        del data["courses"][clean]
+        save_courses_data(data)
 
         c_path = os.path.join(BASE_UPLOAD_DIR, clean)
         if os.path.exists(c_path):
@@ -105,6 +150,22 @@ def remove_course_from_store(name: str) -> bool:
                 shutil.rmtree(c_path, ignore_errors=True)
             except Exception as e:
                 print(f"Error removing course dir: {e}")
+        return True
+    return False
+
+def add_term_to_store(name: str) -> None:
+    data = load_courses_data()
+    clean = name.strip()
+    if clean and clean not in data.get("terms", []):
+        data.setdefault("terms", []).append(clean)
+        save_courses_data(data)
+
+def remove_term_from_store(name: str) -> bool:
+    data = load_courses_data()
+    clean = name.strip()
+    if clean in data.get("terms", []):
+        data["terms"].remove(clean)
+        save_courses_data(data)
         return True
     return False
 
@@ -331,13 +392,16 @@ async def list_files(request: Request):
 
     data = []
     courses = get_all_courses()
+    terms = get_all_terms()
     
+    course_counts = {c: 0 for c in courses}
     for course in courses:
         c_path = os.path.join(BASE_UPLOAD_DIR, course)
         if not os.path.exists(c_path):
             continue
         for fname in os.listdir(c_path):
             if fname.lower().endswith(".pdf"):
+                course_counts[course] = course_counts.get(course, 0) + 1
                 fpath = os.path.join(c_path, fname)
                 try:
                     size = os.path.getsize(fpath)
@@ -348,12 +412,28 @@ async def list_files(request: Request):
                     page_count = 1
                 data.append({
                     "course": course,
+                    "term": get_course_term(course),
                     "filename": fname,
                     "title": os.path.splitext(fname)[0].replace("_", " "),
                     "size": size,
                     "page_count": page_count
                 })
-    return {"courses": courses, "files": data}
+
+    courses_meta = [
+        {
+            "name": c,
+            "term": get_course_term(c),
+            "file_count": course_counts.get(c, 0)
+        }
+        for c in courses
+    ]
+
+    return {
+        "terms": terms,
+        "courses": courses_meta,
+        "raw_courses": courses,
+        "files": data
+    }
 
 
 # --- Chat & Real-Time Voice Signaling ---
@@ -732,8 +812,52 @@ async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
         room_manager.disconnect(websocket)
         await room_manager.broadcast_user_list()
 
+@app.get("/api/terms")
+async def api_get_terms():
+    return {"terms": get_all_terms()}
+
+@app.post("/api/terms")
+async def api_create_term(request: Request, term_name: str = Form(...)):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yalnızca admin dönem ekleyebilir.")
+    clean = term_name.strip()
+    if not clean:
+        raise HTTPException(status_code=400, detail="Geçersiz dönem adı.")
+    add_term_to_store(clean)
+    return {"status": "success", "term": clean}
+
+@app.post("/api/terms/delete")
+@app.delete("/api/terms")
+async def api_delete_term(request: Request, term_name: Optional[str] = None):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yalnızca admin dönem silebilir.")
+    if not term_name:
+        term_name = request.query_params.get("term_name")
+    if not term_name:
+        try:
+            body = await request.json()
+            if isinstance(body, dict): term_name = body.get("term_name")
+        except Exception:
+            pass
+    if not term_name:
+        try:
+            form = await request.form()
+            term_name = form.get("term_name")
+        except Exception:
+            pass
+    if not term_name:
+        raise HTTPException(status_code=400, detail="Dönem adı belirtilmedi.")
+    remove_term_from_store(term_name.strip())
+    return {"status": "success", "message": f"'{term_name}' dönemi silindi."}
+
 @app.post("/api/courses")
-async def create_course(request: Request, course_name: str = Form(...)):
+async def create_course(
+    request: Request,
+    course_name: str = Form(...),
+    term: Optional[str] = Form(None)
+):
     user = get_current_user(request)
     if not user or user.get("role") != "admin":
         raise HTTPException(status_code=403, detail="Yetkisiz işlem! Yalnızca admin ders ekleyebilir.")
@@ -742,8 +866,8 @@ async def create_course(request: Request, course_name: str = Form(...)):
     if not clean_name:
         raise HTTPException(status_code=400, detail="Geçersiz ders adı.")
         
-    add_course_to_store(clean_name)
-    return {"status": "success", "course": clean_name}
+    add_course_to_store(clean_name, term)
+    return {"status": "success", "course": clean_name, "term": term}
 
 @app.post("/api/upload")
 async def upload_pdf(request: Request, course: str = Form(...), file: UploadFile = File(...)):

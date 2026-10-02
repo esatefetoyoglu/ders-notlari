@@ -1,9 +1,22 @@
-[
-  "Anatomi ve Fizyoloji",
-  "Cerrahi Hastalıkları",
-  "Kadın Doğum Hemşireliği",
-  "Sağlık Tanılaması",
-  "Yeni Test Dersi",
-  "İç Hastalıkları",
-  "Genel"
-]
+{
+  "terms": [
+    "1. Sınıf 1. Dönem",
+    "1. Sınıf 2. Dönem",
+    "2. Sınıf 1. Dönem",
+    "2. Sınıf 2. Dönem",
+    "3. Sınıf 1. Dönem",
+    "3. Sınıf 2. Dönem",
+    "4. Sınıf 1. Dönem",
+    "4. Sınıf 2. Dönem"
+  ],
+  "courses": {
+    "Anatomi ve Fizyoloji": "1. Sınıf 1. Dönem",
+    "Cerrahi Hastalıkları": "2. Sınıf 2. Dönem",
+    "Kadın Doğum Hemşireliği": "3. Sınıf 1. Dönem",
+    "Sağlık Tanılaması": "2. Sınıf 1. Dönem",
+    "Yeni Test Dersi": "3. Sınıf 1. Dönem",
+    "İç Hastalıkları": "2. Sınıf 1. Dönem",
+    "Genel": "1. Sınıf 1. Dönem",
+    "Halk Sağlığı": "4. Sınıf 1. Dönem"
+  }
+}

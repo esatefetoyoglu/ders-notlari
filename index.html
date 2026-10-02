@@ -105,6 +105,11 @@
             Yeni PDF Yükle
           </button>
 
+          <button id="adminBackupHeaderBtn" onclick="openAdminBackupModal()" class="hidden items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-semibold px-3.5 py-2.5 rounded-xl shadow-sm transition-all hover:shadow active:scale-95" title="Veri Yedekle & Geri Yükle">
+            <span>💾</span>
+            <span>Veri Yedekle / Kurtar</span>
+          </button>
+
           <div class="flex items-center gap-2 bg-slate-100 px-3 py-1.5 rounded-xl border border-slate-200">
             <span id="headerUserLabel" class="text-xs font-bold text-slate-700"></span>
             <button onclick="handleLogout()" class="text-xs text-slate-400 hover:text-rose-600 p-1 transition-all" title="Çıkış Yap">
@@ -148,6 +153,14 @@
           </div>
         </div>
         <div class="flex items-center gap-2 overflow-x-auto pb-1 custom-scrollbar" id="categoryPills"></div>
+
+        <!-- Hierarchical Breadcrumb Navigation -->
+        <div id="breadcrumbBar" class="flex flex-wrap items-center justify-between gap-3 bg-white p-3.5 rounded-2xl border border-slate-200/90 shadow-sm">
+          <div class="flex items-center gap-2 text-xs font-medium text-slate-500 overflow-x-auto" id="breadcrumbItems">
+            <span class="font-bold text-slate-800">📂 Yükleniyor...</span>
+          </div>
+          <div id="breadcrumbActions" class="flex items-center gap-2"></div>
+        </div>
       </div>
 
       <!-- Cards Grid -->
@@ -433,12 +446,21 @@
         const isAdmin = currentUser.role === 'admin';
         headerUserLabel.textContent = (isAdmin ? '👑 ' : '👤 ') + currentUser.username;
 
+        const backupHeaderBtn = document.getElementById('adminBackupHeaderBtn');
         if (isAdmin) {
           adminUploadBtn.classList.remove('hidden');
           adminUploadBtn.classList.add('inline-flex');
+          if (backupHeaderBtn) {
+            backupHeaderBtn.classList.remove('hidden');
+            backupHeaderBtn.classList.add('inline-flex');
+          }
         } else {
           adminUploadBtn.classList.add('hidden');
           adminUploadBtn.classList.remove('inline-flex');
+          if (backupHeaderBtn) {
+            backupHeaderBtn.classList.add('hidden');
+            backupHeaderBtn.classList.remove('inline-flex');
+          }
         }
 
         loadData();
@@ -2000,60 +2022,79 @@
         const res = await fetch('/api/files', { headers });
         if (!res.ok) return;
         const data = await res.json();
-        courses = ['Tümü', ...data.courses];
-        files = data.files;
-        renderCategories();
-        renderFiles();
+        
+        terms = ['Tümü', ...(data.terms || [])];
+        coursesMeta = data.courses || [];
+        rawCourses = data.raw_courses || [];
+        files = data.files || [];
+
+        if (!terms.includes(selectedTerm)) {
+          selectedTerm = '3. Sınıf 1. Dönem';
+          if (!terms.includes(selectedTerm)) selectedTerm = 'Tümü';
+        }
+        if (selectedCourse && !rawCourses.includes(selectedCourse)) {
+          selectedCourse = null;
+        }
+
+        renderTermPills();
+        renderContent();
+        populateUploadSelects();
       } catch (e) {
         console.error(e);
       }
     }
 
-    
     function populateUploadSelects() {
       const s1 = document.getElementById('driveCourseSelect');
       const s2 = document.getElementById('localCourseSelect');
       if (!s1 || !s2) return;
       s1.innerHTML = '';
       s2.innerHTML = '';
-      courses.forEach(cat => {
-        if (cat !== 'Tümü') {
-          const opt1 = document.createElement('option'); opt1.value = cat; opt1.textContent = cat; s1.appendChild(opt1);
-          const opt2 = document.createElement('option'); opt2.value = cat; opt2.textContent = cat; s2.appendChild(opt2);
-        }
+      coursesMeta.forEach(c => {
+        const opt1 = document.createElement('option');
+        opt1.value = c.name;
+        opt1.textContent = `${c.name} (${c.term})`;
+        s1.appendChild(opt1);
+
+        const opt2 = document.createElement('option');
+        opt2.value = c.name;
+        opt2.textContent = `${c.name} (${c.term})`;
+        s2.appendChild(opt2);
       });
     }
 
-    function renderCategories() {
+    function renderTermPills() {
       const container = document.getElementById('categoryPills');
       if (!container) return;
       container.innerHTML = '';
+      const isAdmin = currentUser && currentUser.role === 'admin';
 
-      courses.forEach(cat => {
+      terms.forEach(term => {
         const btn = document.createElement('div');
-        const isActive = cat === selectedCategory;
-        const isAdmin = currentUser && currentUser.role === 'admin';
+        const isActive = term === selectedTerm;
 
         btn.className = `inline-flex items-center gap-1.5 px-3.5 py-1.5 rounded-xl text-xs font-semibold whitespace-nowrap transition-all cursor-pointer ${
           isActive ? 'bg-indigo-600 text-white shadow-sm' : 'bg-slate-100 hover:bg-slate-200 text-slate-600'
         }`;
-        
-        btn.innerHTML = `<span>${escapeHtml(cat)}</span>`;
+
+        btn.innerHTML = `<span>${escapeHtml(term)}</span>`;
         btn.onclick = () => {
-          selectedCategory = cat;
-          renderCategories();
-          renderFiles();
+          selectedTerm = term;
+          selectedCourse = null;
+          renderTermPills();
+          renderContent();
         };
 
-        // If admin and not 'Tümü', show delete course button
-        if (isAdmin && cat !== 'Tümü') {
+        if (isAdmin && term !== 'Tümü') {
           const delBtn = document.createElement('button');
-          delBtn.title = `"${cat}" Dersini Sil`;
-          delBtn.className = `ml-1.5 text-rose-500 hover:text-white hover:bg-rose-500 p-1 rounded-md font-bold transition-all flex items-center justify-center text-xs leading-none`;
+          delBtn.title = `"${term}" Dönemini Sil`;
+          delBtn.className = `ml-1 hover:text-white hover:bg-rose-500 p-0.5 rounded text-xs font-bold transition-all ${
+            isActive ? 'text-indigo-200 hover:text-white' : 'text-slate-400 hover:text-rose-500'
+          }`;
           delBtn.innerHTML = `✕`;
           delBtn.onclick = (e) => {
             e.stopPropagation();
-            handleDeleteCourse(cat);
+            handleDeleteTerm(term);
           };
           btn.appendChild(delBtn);
         }
@@ -2061,117 +2102,425 @@
         container.appendChild(btn);
       });
 
-      // Admin quick buttons next to category pills
-      if (currentUser && currentUser.role === 'admin') {
+      if (isAdmin) {
         const addBtn = document.createElement('button');
         addBtn.className = 'inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-indigo-600 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 whitespace-nowrap transition-all shadow-sm';
-        addBtn.innerHTML = '<span>+ Ders Ekle</span>';
-        addBtn.onclick = () => promptNewCourse();
+        addBtn.innerHTML = '<span>+ Yeni Dönem / Sınıf</span>';
+        addBtn.onclick = () => promptNewTerm();
         container.appendChild(addBtn);
 
         const manageBtn = document.createElement('button');
-        manageBtn.className = 'inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 whitespace-nowrap transition-all shadow-sm';
-        manageBtn.innerHTML = '<span>⚙️ Dersleri Yönet (Sil)</span>';
+        manageBtn.className = 'inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-slate-700 bg-slate-100 hover:bg-slate-200 border border-slate-300 whitespace-nowrap transition-all shadow-sm';
+        manageBtn.innerHTML = '<span>⚙️ Dersleri Yönet</span>';
         manageBtn.onclick = () => openManageCoursesModal();
         container.appendChild(manageBtn);
-
-        const backupBtn = document.createElement('button');
-        backupBtn.className = 'inline-flex items-center gap-1 px-3 py-1.5 rounded-xl text-xs font-bold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 whitespace-nowrap transition-all shadow-sm';
-        backupBtn.innerHTML = '<span>💾 Veri Yedekle / Kurtar</span>';
-        backupBtn.onclick = () => openAdminBackupModal();
-        container.appendChild(backupBtn);
       }
-
-      populateUploadSelects();
     }
 
-    function renderFiles() {
+    function openCourseFolder(courseName) {
+      selectedCourse = courseName;
+      renderContent();
+    }
+
+    function renderContent() {
       const grid = document.getElementById('fileGrid');
       const empty = document.getElementById('emptyState');
-      const search = document.getElementById('searchInput').value.toLowerCase().trim();
+      const bcItems = document.getElementById('breadcrumbItems');
+      const bcActions = document.getElementById('breadcrumbActions');
+      const countBadge = document.getElementById('fileCountBadge');
+      const searchInput = document.getElementById('searchInput');
+      const search = searchInput ? searchInput.value.toLowerCase().trim() : '';
       const isAdmin = currentUser && currentUser.role === 'admin';
 
-      const filtered = files.filter(item => {
-        const matchCat = (selectedCategory === 'Tümü') || (item.course === selectedCategory);
-        const matchSearch = (!search) || (item.title.toLowerCase().includes(search) || item.course.toLowerCase().includes(search));
-        return matchCat && matchSearch;
-      });
+      if (!grid || !bcItems) return;
+      grid.innerHTML = '';
+      if (empty) empty.classList.add('hidden');
+      if (bcActions) bcActions.innerHTML = '';
 
-      document.getElementById('fileCountBadge').textContent = `${filtered.length} Not Bulundu`;
+      // --- DURUM 1: ARAMA AKTİFSE ---
+      if (search.length > 0) {
+        bcItems.innerHTML = `
+          <span class="font-bold text-slate-900 flex items-center gap-1.5">
+            <span>🔍</span>
+            <span>Arama Sonuçları: "${escapeHtml(search)}"</span>
+          </span>
+        `;
+        const clearBtn = document.createElement('button');
+        clearBtn.className = 'px-2.5 py-1 text-xs text-slate-500 hover:text-indigo-600 font-semibold bg-slate-100 hover:bg-slate-200 rounded-lg transition';
+        clearBtn.textContent = 'Aramayı Temizle ✕';
+        clearBtn.onclick = () => {
+          searchInput.value = '';
+          renderContent();
+        };
+        bcActions.appendChild(clearBtn);
 
-      if (filtered.length === 0) {
-        grid.innerHTML = '';
-        empty.classList.remove('hidden');
+        const matchedFiles = files.filter(f => 
+          (f.title && f.title.toLowerCase().includes(search)) ||
+          (f.filename && f.filename.toLowerCase().includes(search)) ||
+          (f.course && f.course.toLowerCase().includes(search)) ||
+          (f.term && f.term.toLowerCase().includes(search))
+        );
+
+        if (countBadge) countBadge.textContent = `${matchedFiles.length} Not Bulundu`;
+
+        if (matchedFiles.length === 0) {
+          if (empty) {
+            empty.classList.remove('hidden');
+            document.getElementById('emptyStateText').textContent = `"${search}" ile eşleşen ders notu veya konu bulunamadı.`;
+          }
+          return;
+        }
+
+        matchedFiles.forEach(file => {
+          grid.appendChild(createFileCard(file, isAdmin));
+        });
         return;
       }
 
-      empty.classList.add('hidden');
-      grid.innerHTML = filtered.map(item => `
-        <div class="bg-white rounded-2xl border border-slate-200 p-5 shadow-sm hover:shadow-md transition-all flex flex-col justify-between group">
-          <div class="space-y-3">
-            <div class="flex items-start justify-between gap-2">
-              <span class="inline-block text-[11px] font-bold uppercase tracking-wider bg-indigo-50 text-indigo-700 px-2.5 py-1 rounded-lg">
-                ${escapeHtml(item.course)}
-              </span>
-              ${isAdmin ? `
-                <button onclick="handleDeletePdf('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}')" title="Notu Sil (Admin)" 
-                  class="text-slate-300 hover:text-rose-500 opacity-0 group-hover:opacity-100 transition-opacity p-1">
-                  <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
-                </button>
-              ` : ''}
-            </div>
-            <div>
-              <h4 class="font-bold text-slate-900 text-base leading-snug line-clamp-2">${escapeHtml(item.title)}</h4>
-              <div class="flex items-center gap-3 text-xs text-slate-400 mt-2">
-                <span>${item.page_count} Sayfa</span>
-                <span>•</span>
-                <span>${formatBytes(item.size)}</span>
-              </div>
-            </div>
+      // --- DURUM 2: BİR DERSİN İÇİNE GİRİLDİYSE (Konular ve Notlar) ---
+      if (selectedCourse !== null) {
+        bcItems.innerHTML = `
+          <button onclick="selectedCourse=null; renderContent();" class="px-2.5 py-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl transition flex items-center gap-1 mr-1">
+            <span>← Derslere Dön</span>
+          </button>
+          <span onclick="selectedTerm='Tümü'; selectedCourse=null; renderTermPills(); renderContent();" class="text-indigo-600 hover:underline cursor-pointer">
+            🏠 Anasayfa
+          </span>
+          <span class="text-slate-400">›</span>
+          <span onclick="selectedCourse=null; renderContent();" class="text-indigo-600 hover:underline cursor-pointer">
+            📂 ${escapeHtml(selectedTerm)}
+          </span>
+          <span class="text-slate-400">›</span>
+          <span class="font-bold text-slate-900 flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-indigo-600"></span>
+            <span>📁 ${escapeHtml(selectedCourse)}</span>
+          </span>
+        `;
+
+        if (isAdmin) {
+          const addNoteBtn = document.createElement('button');
+          addNoteBtn.className = 'px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-1.5';
+          addNoteBtn.innerHTML = '<span>+ Bu Derse Not / PDF Yükle</span>';
+          addNoteBtn.onclick = () => openUploadForCourse(selectedCourse, selectedTerm);
+          bcActions.appendChild(addNoteBtn);
+        }
+
+        const courseFiles = files.filter(f => f.course === selectedCourse);
+        if (countBadge) countBadge.textContent = `${courseFiles.length} Konu / Not`;
+
+        if (courseFiles.length === 0) {
+          const emptyCard = document.createElement('div');
+          emptyCard.className = 'col-span-full py-12 text-center bg-white rounded-2xl border border-dashed border-slate-300 p-8 space-y-3';
+          emptyCard.innerHTML = `
+            <div class="w-12 h-12 bg-indigo-50 text-indigo-600 rounded-2xl flex items-center justify-center mx-auto text-2xl font-bold">📄</div>
+            <h4 class="font-bold text-slate-800 text-sm">"${escapeHtml(selectedCourse)}" dersine henüz not eklenmemiş</h4>
+            <p class="text-xs text-slate-400 max-w-sm mx-auto">İlk PDF notunu veya Google Drive ders sunumunu ekleyerek arkadaşlarınla paylaşabilirsin.</p>
+            ${isAdmin ? `
+              <button onclick="openUploadForCourse('${escapeHtml(selectedCourse)}', '${escapeHtml(selectedTerm)}')" class="mt-2 px-4 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow hover:bg-indigo-700 transition">
+                + Hemen PDF Notu Ekle
+              </button>
+            ` : ''}
+          `;
+          grid.appendChild(emptyCard);
+          return;
+        }
+
+        courseFiles.forEach(file => {
+          grid.appendChild(createFileCard(file, isAdmin));
+        });
+        return;
+      }
+
+      // --- DURUM 3: BİR DÖNEM SEÇİLDİYSE (Ders Klasörleri Listesi) ---
+      if (selectedTerm !== 'Tümü') {
+        bcItems.innerHTML = `
+          <span onclick="selectedTerm='Tümü'; selectedCourse=null; renderTermPills(); renderContent();" class="text-indigo-600 hover:underline cursor-pointer">
+            🏠 Tüm Sınıflar & Dönemler
+          </span>
+          <span class="text-slate-400">›</span>
+          <span class="font-bold text-slate-900 flex items-center gap-1.5">
+            <span class="w-2 h-2 rounded-full bg-emerald-500"></span>
+            <span>📂 ${escapeHtml(selectedTerm)}</span>
+          </span>
+        `;
+
+        if (isAdmin) {
+          const addCourseBtn = document.createElement('button');
+          addCourseBtn.className = 'px-3.5 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs rounded-xl shadow-sm transition flex items-center gap-1.5';
+          addCourseBtn.innerHTML = '<span>+ Bu Döneme Ders Ekle</span>';
+          addCourseBtn.onclick = () => promptNewCourseForTerm(selectedTerm);
+          bcActions.appendChild(addCourseBtn);
+        }
+
+        const termCourses = coursesMeta.filter(c => c.term === selectedTerm);
+        if (countBadge) countBadge.textContent = `${termCourses.length} Ders Klasörü`;
+
+        if (termCourses.length === 0) {
+          const emptyTermCard = document.createElement('div');
+          emptyTermCard.className = 'col-span-full py-12 text-center bg-white rounded-2xl border border-dashed border-slate-300 p-8 space-y-3';
+          emptyTermCard.innerHTML = `
+            <div class="w-12 h-12 bg-amber-50 text-amber-600 rounded-2xl flex items-center justify-center mx-auto text-2xl font-bold">📁</div>
+            <h4 class="font-bold text-slate-800 text-sm">"${escapeHtml(selectedTerm)}" dönemine henüz ders eklenmemiş</h4>
+            <p class="text-xs text-slate-400 max-w-sm mx-auto">Bu döneme ait ders klasörlerini oluşturup içerisine ders notlarını ekleyebilirsiniz.</p>
+            ${isAdmin ? `
+              <button onclick="promptNewCourseForTerm('${escapeHtml(selectedTerm)}')" class="mt-2 px-4 py-2 bg-indigo-600 text-white font-bold text-xs rounded-xl shadow hover:bg-indigo-700 transition">
+                + Yeni Ders Klasörü Oluştur
+              </button>
+            ` : ''}
+          `;
+          grid.appendChild(emptyTermCard);
+          return;
+        }
+
+        termCourses.forEach(c => {
+          grid.appendChild(createCourseFolderCard(c, isAdmin));
+        });
+
+        if (isAdmin) {
+          grid.appendChild(createAddCourseFolderCard(selectedTerm));
+        }
+        return;
+      }
+
+      // --- DURUM 4: 'TÜMÜ' SEÇİLİYKEN (Dönem Klasörleri Listesi) ---
+      bcItems.innerHTML = `
+        <span class="font-bold text-slate-900 flex items-center gap-1.5">
+          <span>🏫</span>
+          <span>Tüm Sınıflar ve Dönemler</span>
+        </span>
+        <span class="text-xs text-slate-400 font-normal ml-2">Bir döneme tıklayarak ders klasörlerini görüntüleyebilirsiniz</span>
+      `;
+
+      if (countBadge) countBadge.textContent = `${files.length} Not Toplam`;
+
+      const realTerms = terms.filter(t => t !== 'Tümü');
+      realTerms.forEach(t => {
+        grid.appendChild(createSemesterCard(t));
+      });
+    }
+
+    function createCourseFolderCard(c, isAdmin) {
+      const div = document.createElement('div');
+      div.className = 'bg-white rounded-2xl border border-slate-200/90 p-5 shadow-sm hover:shadow-md hover:border-indigo-400 transition-all duration-200 cursor-pointer group flex flex-col justify-between';
+      div.onclick = () => openCourseFolder(c.name);
+
+      div.innerHTML = `
+        <div class="flex items-start justify-between">
+          <div class="w-12 h-12 rounded-2xl bg-indigo-50 group-hover:bg-indigo-600 text-indigo-600 group-hover:text-white flex items-center justify-center font-bold text-2xl transition-all duration-200 shadow-sm">
+            📁
+          </div>
+          ${isAdmin ? `
+            <button type="button" onclick="event.stopPropagation(); handleDeleteCourse('${escapeHtml(c.name)}')" title="Dersi Sil" class="text-slate-400 hover:text-rose-600 p-1.5 rounded-lg hover:bg-rose-50 transition">
+              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+            </button>
+          ` : ''}
+        </div>
+        <div class="mt-4">
+          <h3 class="font-bold text-slate-800 text-base group-hover:text-indigo-600 transition truncate" title="${escapeHtml(c.name)}">
+            ${escapeHtml(c.name)}
+          </h3>
+          <p class="text-xs text-slate-500 mt-1 flex items-center gap-1.5 font-medium">
+            <span>📄</span>
+            <span>${c.file_count || 0} Konu / Not</span>
+          </p>
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-indigo-600">
+          <span>Konuları Gör</span>
+          <span class="group-hover:translate-x-1 transition-transform">→</span>
+        </div>
+      `;
+      return div;
+    }
+
+    function createSemesterCard(termName) {
+      const termCourses = coursesMeta.filter(c => c.term === termName);
+      const termFiles = files.filter(f => f.term === termName);
+
+      const div = document.createElement('div');
+      div.className = 'bg-white rounded-2xl border border-slate-200/90 p-5 shadow-sm hover:shadow-md hover:border-indigo-500 transition-all duration-200 cursor-pointer group flex flex-col justify-between';
+      div.onclick = () => {
+        selectedTerm = termName;
+        selectedCourse = null;
+        renderTermPills();
+        renderContent();
+      };
+
+      div.innerHTML = `
+        <div class="flex items-start justify-between">
+          <div class="w-12 h-12 rounded-2xl bg-emerald-50 group-hover:bg-emerald-600 text-emerald-600 group-hover:text-white flex items-center justify-center font-bold text-2xl transition-all duration-200 shadow-sm">
+            📂
+          </div>
+          <span class="text-xs font-bold text-indigo-600 bg-indigo-50 px-2.5 py-1 rounded-lg">
+            ${termCourses.length} Ders
+          </span>
+        </div>
+        <div class="mt-4">
+          <h3 class="font-bold text-slate-900 text-base group-hover:text-indigo-600 transition">
+            ${escapeHtml(termName)}
+          </h3>
+          <p class="text-xs text-slate-500 mt-1 font-medium">
+            ${termFiles.length} Ders Notu & PDF
+          </p>
+        </div>
+        <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs font-bold text-slate-600 group-hover:text-indigo-600">
+          <span>Ders Klasörlerini Aç</span>
+          <span class="group-hover:translate-x-1 transition-transform">→</span>
+        </div>
+      `;
+      return div;
+    }
+
+    function createAddCourseFolderCard(termName) {
+      const div = document.createElement('div');
+      div.className = 'border-2 border-dashed border-slate-300 hover:border-indigo-400 bg-slate-50/50 hover:bg-indigo-50/20 rounded-2xl p-5 flex flex-col items-center justify-center text-center cursor-pointer transition min-h-[170px] group';
+      div.onclick = () => promptNewCourseForTerm(termName);
+      div.innerHTML = `
+        <div class="w-12 h-12 rounded-2xl bg-white border border-slate-200 group-hover:bg-indigo-600 group-hover:text-white text-indigo-600 flex items-center justify-center text-2xl font-bold shadow-sm transition">
+          +
+        </div>
+        <p class="mt-3 text-xs font-bold text-slate-700 group-hover:text-indigo-600">Yeni Ders Klasörü Ekle</p>
+        <p class="text-[10px] text-slate-400">Bu döneme ait ders oluştur</p>
+      `;
+      return div;
+    }
+
+    function createFileCard(file, isAdmin) {
+      const card = document.createElement('div');
+      card.className = 'bg-white rounded-2xl border border-slate-200 overflow-hidden shadow-sm hover:shadow-md hover:border-slate-300 transition-all flex flex-col justify-between group';
+
+      const sizeKb = Math.round(file.size / 1024);
+      const isLarge = sizeKb > 1024;
+      const sizeStr = isLarge ? (sizeKb / 1024).toFixed(1) + ' MB' : sizeKb + ' KB';
+
+      card.innerHTML = `
+        <div class="p-5 flex-1">
+          <div class="flex items-start justify-between gap-3">
+            <span class="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg text-[11px] font-semibold bg-indigo-50 text-indigo-700">
+              <span>📚</span>
+              <span>${escapeHtml(file.course)}</span>
+            </span>
+            ${isAdmin ? `
+              <button onclick="handleDeleteFile('${escapeHtml(file.course)}', '${escapeHtml(file.filename)}')" title="Notu Sil" class="text-slate-400 hover:text-rose-600 p-1 rounded-lg hover:bg-rose-50 transition">
+                <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16"></path></svg>
+              </button>
+            ` : ''}
           </div>
 
-          <div class="pt-5 mt-4 border-t border-slate-100 space-y-2">
-            <button onclick="openViewer('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}', '${escapeHtml(item.title)}')"
-              class="w-full bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold py-2.5 px-3 rounded-xl transition-all flex items-center justify-center gap-2 shadow-sm active:scale-98">
-              <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M15 12a3 3 0 11-6 0 3 3 0 016 0z"></path><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M2.458 12C3.732 7.943 7.523 5 12 5c4.478 0 8.268 2.943 9.542 7-1.274 4.057-5.064 7-9.542 7-4.477 0-8.268-2.943-9.542-7z"></path></svg>
-              İncele & Çizim Yap
-            </button>
+          <h3 class="font-bold text-slate-900 mt-3 text-sm leading-snug group-hover:text-indigo-600 transition" title="${escapeHtml(file.title)}">
+            ${escapeHtml(file.title)}
+          </h3>
 
-            <div class="flex items-center gap-2">
-              <a href="/api/download?course=${encodeURIComponent(item.course)}&filename=${encodeURIComponent(item.filename)}&token=${encodeURIComponent(localStorage.getItem('session_token') || '')}" 
-                class="flex-1 bg-slate-900 hover:bg-slate-800 text-white text-xs font-semibold py-2 px-3 rounded-xl transition-all text-center">
-                Tam İndir
-              </a>
-              <button onclick="openRangeModal('${escapeHtml(item.course)}', '${escapeHtml(item.filename)}', '${escapeHtml(item.title)}', ${item.page_count})" 
-                class="flex-1 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-semibold py-2 px-3 rounded-xl transition-all text-center">
-                Sayfa Aralığı
-              </button>
+          <div class="flex items-center gap-3 text-xs text-slate-400 mt-2 font-medium">
+            <span>📄 ${file.page_count} sayfa</span>
+            <span>•</span>
+            <span>💾 ${sizeStr}</span>
+          </div>
+
+          <div class="mt-4 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+            <div class="flex items-center gap-1 text-amber-500 font-bold">
+              <span>★</span>
+              <span>${(file.rating_avg || 5.0).toFixed(1)}</span>
+            </div>
+            <div class="text-slate-400 flex items-center gap-2">
+              <span>💬 ${file.comments_count || 0}</span>
+              <span>✏️ Çizim</span>
             </div>
           </div>
         </div>
-      `).join('');
+
+        <div class="px-5 pb-5 pt-0 flex gap-2">
+          <button onclick="openViewer('${escapeHtml(file.course)}', '${escapeHtml(file.filename)}')" class="flex-1 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-xl text-xs shadow-sm transition flex items-center justify-center gap-1.5">
+            <span>✏️ İncele & Çiz</span>
+          </button>
+          <a href="/api/download?course=${encodeURIComponent(file.course)}&filename=${encodeURIComponent(file.filename)}" download class="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition flex items-center justify-center" title="İndir">
+            ⬇
+          </a>
+        </div>
+      `;
+      return card;
     }
 
-    async function handleDeletePdf(course, filename) {
-      if (confirm(`"${filename}" dosyasını silmek istediğinize emin misiniz?`)) {
-        try {
-          const res = await fetch(`/api/delete/${encodeURIComponent(course)}/${encodeURIComponent(filename)}`, { method: 'DELETE' });
-          if (res.ok) {
-            await loadData();
-          } else {
-            const data = await res.json();
-            alert('Silme başarısız: ' + (data.detail || 'Yetkisiz'));
-          }
-        } catch (e) {
-          alert('Hata: ' + e);
+    async function promptNewCourseForTerm(termName) {
+      const name = prompt(`"${termName}" dönemine eklenecek yeni ders adını girin:`);
+      if (!name || !name.trim()) return;
+      const courseName = name.trim();
+
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const formData = new FormData();
+        formData.append('course_name', courseName);
+        formData.append('term', termName);
+
+        const res = await fetch('/api/courses', { method: 'POST', body: formData, headers });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`✓ "${courseName}" dersi "${termName}" dönemine başarıyla eklendi!`);
+          await loadData();
+        } else {
+          alert('Ders eklenemedi: ' + (data.detail || 'Yetkisiz'));
         }
+      } catch (err) {
+        alert('Hata: ' + err.message);
       }
     }
 
-    // --- PDF Viewer & Drawing ---
-    let currentRenderTask = null;
+    async function promptNewTerm() {
+      const name = prompt('Yeni Sınıf / Dönem adını girin (Örn: "5. Sınıf 1. Dönem" veya "Yaz Okulu"):');
+      if (!name || !name.trim()) return;
+      const termName = name.trim();
 
-    async function openViewer(course, filename, title) {
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const formData = new FormData();
+        formData.append('term_name', termName);
+
+        const res = await fetch('/api/terms', { method: 'POST', body: formData, headers });
+        const data = await res.json();
+        if (res.ok) {
+          alert(`✓ "${termName}" dönemi başarıyla eklendi!`);
+          selectedTerm = termName;
+          selectedCourse = null;
+          await loadData();
+        } else {
+          alert('Dönem eklenemedi: ' + (data.detail || 'Yetkisiz'));
+        }
+      } catch (err) {
+        alert('Hata: ' + err.message);
+      }
+    }
+
+    async function handleDeleteTerm(termName) {
+      if (!confirm(`"${termName}" dönemini silmek istediğinize emin misiniz?`)) return;
+      try {
+        const token = localStorage.getItem('session_token');
+        const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
+        const res = await fetch(`/api/terms?term_name=${encodeURIComponent(termName)}`, {
+          method: 'DELETE',
+          headers
+        });
+        if (res.ok) {
+          alert(`✓ "${termName}" dönemi silindi.`);
+          if (selectedTerm === termName) selectedTerm = 'Tümü';
+          await loadData();
+        }
+      } catch (e) {
+        alert('Hata: ' + e.message);
+      }
+    }
+
+    function openUploadForCourse(courseName, termName) {
+      openUploadModal();
+      setTimeout(() => {
+        const s1 = document.getElementById('driveCourseSelect');
+        const s2 = document.getElementById('localCourseSelect');
+        if (s1) s1.value = courseName;
+        if (s2) s2.value = courseName;
+      }, 50);
+    }
+
+    function openViewer(course, filename, title) {
       currentViewerFile = { course, filename, title };
       document.getElementById('viewerTitle').textContent = title;
       document.getElementById('viewerCourse').textContent = course;
