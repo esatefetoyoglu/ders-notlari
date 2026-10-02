@@ -117,11 +117,12 @@ def save_auth_data(data):
         json.dump(data, f, indent=2)
 
 def get_current_user(request: Request) -> Optional[dict]:
-    token = request.cookies.get("session_token")
+    token = None
+    auth_header = request.headers.get("authorization")
+    if auth_header and auth_header.startswith("Bearer "):
+        token = auth_header.split(" ")[1]
     if not token:
-        auth_header = request.headers.get("authorization")
-        if auth_header and auth_header.startswith("Bearer "):
-            token = auth_header.split(" ")[1]
+        token = request.cookies.get("session_token")
 
     if not token:
         return None
@@ -337,9 +338,46 @@ def load_chat_messages():
         return []
     try:
         with open(CHAT_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
+            msgs = json.load(f)
+            # Ensure seen_by field exists on all messages
+            for m in msgs:
+                if "seen_by" not in m:
+                    m["seen_by"] = [{
+                        "username": m.get("username", "user"),
+                        "role": m.get("role", "user"),
+                        "time": m.get("time", "")
+                    }]
+            return msgs
     except Exception:
         return []
+
+def mark_messages_seen(username: str, role: str, message_ids: Optional[List[str]] = None) -> List[dict]:
+    msgs = load_chat_messages()
+    updated = []
+    current_time = time.strftime("%H:%M")
+    changed = False
+
+    for m in msgs:
+        if message_ids is not None and m.get("id") not in message_ids:
+            continue
+        seen_by = m.setdefault("seen_by", [])
+        if not any(u.get("username") == username for u in seen_by):
+            seen_by.append({
+                "username": username,
+                "role": role,
+                "time": current_time
+            })
+            changed = True
+            updated.append({"id": m["id"], "seen_by": seen_by})
+
+    if changed:
+        try:
+            with open(CHAT_FILE, "w", encoding="utf-8") as f:
+                json.dump(msgs, f, ensure_ascii=False, indent=2)
+        except Exception as e:
+            print("Error saving seen status:", e)
+
+    return updated
 
 def save_chat_message(msg_obj):
     msgs = load_chat_messages()
@@ -430,6 +468,25 @@ async def delete_course(request: Request, course_name: Optional[str] = None):
     remove_course_from_store(course_name)
     return {"status": "success", "message": f"'{course_name}' dersi ve tüm dosyaları başarıyla silindi."}
 
+@app.post("/api/chat/seen")
+async def api_chat_seen(request: Request):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+    body = {}
+    try:
+        body = await request.json()
+    except Exception:
+        pass
+    msg_ids = body.get("message_ids")
+    updated = mark_messages_seen(user["username"], user.get("role", "user"), msg_ids)
+    if updated:
+        await room_manager.broadcast({
+            "type": "messages_seen_update",
+            "updates": updated
+        })
+    return {"status": "success", "updated_count": len(updated)}
+
 @app.get("/api/chat/messages")
 async def get_chat_messages(request: Request):
     user = get_current_user(request)
@@ -494,6 +551,7 @@ async def send_chat_message(
     if not clean_text and not media_url:
         raise HTTPException(status_code=400, detail="Mesaj veya medya boş olamaz.")
     
+    now_time = time.strftime("%H:%M")
     msg_obj = {
         "id": "msg_" + secrets.token_hex(6),
         "username": user["username"],
@@ -501,7 +559,14 @@ async def send_chat_message(
         "text": clean_text,
         "media_url": media_url or None,
         "media_type": media_type or None,
-        "time": time.strftime("%H:%M")
+        "time": now_time,
+        "seen_by": [
+            {
+                "username": user["username"],
+                "role": user.get("role", "user"),
+                "time": now_time
+            }
+        ]
     }
     save_chat_message(msg_obj)
     await room_manager.broadcast({"type": "chat_message", "message": msg_obj})
@@ -533,17 +598,40 @@ async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
                     media_type = msg.get("media_type")
                     if text or media_url:
                         user_info = data.get("users", {}).get(username, {})
+                        user_role = user_info.get("role", "user")
+                        now_time = time.strftime("%H:%M")
                         msg_obj = {
                             "id": "msg_" + secrets.token_hex(6),
                             "username": username,
-                            "role": user_info.get("role", "user"),
+                            "role": user_role,
                             "text": text,
                             "media_url": media_url or None,
                             "media_type": media_type or None,
-                            "time": time.strftime("%H:%M")
+                            "time": now_time,
+                            "seen_by": [
+                                {
+                                    "username": username,
+                                    "role": user_role,
+                                    "time": now_time
+                                }
+                            ]
                         }
                         save_chat_message(msg_obj)
                         await room_manager.broadcast({"type": "chat_message", "message": msg_obj})
+
+                elif mtype == "chat_seen":
+                    msg_ids = msg.get("message_ids")
+                    user_info = data.get("users", {}).get(username, {})
+                    user_role = user_info.get("role", "user")
+                    updated = mark_messages_seen(username, user_role, msg_ids)
+                    if updated:
+                        await room_manager.broadcast({
+                            "type": "messages_seen_update",
+                            "updates": updated
+                        })
+
+                elif mtype == "ping":
+                    await websocket.send_text(json.dumps({"type": "pong"}))
 
                 elif mtype == "voice_join":
                     if websocket in room_manager.connections:

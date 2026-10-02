@@ -666,8 +666,16 @@
         drawer.classList.remove('translate-x-full');
         loadChatHistory();
         scrollToBottom();
+        markVisibleMessagesAsSeen();
+        if (!chatPollTimer) {
+          chatPollTimer = setInterval(syncChatMessages, 3000);
+        }
       } else {
         drawer.classList.add('translate-x-full');
+        if (chatPollTimer) {
+          clearInterval(chatPollTimer);
+          chatPollTimer = null;
+        }
       }
     }
 
@@ -708,7 +716,28 @@
             if (!data) return;
 
             if (data.type === 'chat_message') {
-              appendChatMessage(data.message);
+              const msg = data.message;
+              // Check if temporary optimistic message exists with matching text/media
+              for (const [id, m] of Object.entries(chatMessagesMap)) {
+                if (m.pending && m.username === msg.username && m.text === msg.text && m.media_url === msg.media_url) {
+                  const el = document.getElementById('msg_el_' + id);
+                  if (el) el.remove();
+                  displayedMessageIds.delete(id);
+                  delete chatMessagesMap[id];
+                  break;
+                }
+              }
+              appendChatMessage(msg, true);
+              if (isChatDrawerOpen) {
+                markVisibleMessagesAsSeen();
+              }
+            } else if (data.type === 'messages_seen_update') {
+              (data.updates || []).forEach(up => {
+                if (chatMessagesMap[up.id]) {
+                  chatMessagesMap[up.id].seen_by = up.seen_by;
+                  appendChatMessage(chatMessagesMap[up.id], false);
+                }
+              });
             } else if (data.type === 'room_state') {
               onlineUsersList = data.online_users || [];
               voiceUsersList = data.voice_users || [];
@@ -725,10 +754,19 @@
           }
         };
 
+        chatWs.onopen = () => {
+          if (wsPingTimer) clearInterval(wsPingTimer);
+          wsPingTimer = setInterval(() => {
+            if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+              chatWs.send(JSON.stringify({ type: 'ping' }));
+            }
+          }, 20000);
+        };
+
         chatWs.onclose = () => {
-          // Reconnect after 3 seconds if still authenticated
+          if (wsPingTimer) clearInterval(wsPingTimer);
           if (currentUser.authenticated) {
-            setTimeout(initChatWebSocket, 3000);
+            setTimeout(initChatWebSocket, 2000);
           }
         };
       } catch (e) {
@@ -748,21 +786,50 @@
       } catch (e) {}
     }
 
+        // --- Chat State & Seen Tracking ---
+    let chatMessagesList = [];
+    let chatMessagesMap = {}; // id -> message
+    let displayedMessageIds = new Set();
+    let chatPollTimer = null;
+    let wsPingTimer = null;
+
     function renderChatMessages(messages) {
+      chatMessagesList = messages || [];
+      chatMessagesMap = {};
+      displayedMessageIds.clear();
+
       const list = document.getElementById('chatMessageList');
+      if (!list) return;
       list.innerHTML = '';
-      messages.forEach(msg => appendChatMessage(msg, false));
+
+      chatMessagesList.forEach(msg => {
+        chatMessagesMap[msg.id] = msg;
+        displayedMessageIds.add(msg.id);
+        appendChatMessage(msg, false);
+      });
       scrollToBottom();
+      markVisibleMessagesAsSeen();
     }
 
     function appendChatMessage(msg, shouldScroll = true) {
       const list = document.getElementById('chatMessageList');
       if (!list) return;
+
+      chatMessagesMap[msg.id] = msg;
+      displayedMessageIds.add(msg.id);
+
       const isMe = currentUser && msg.username === currentUser.username;
       const isAdmin = msg.role === 'admin';
 
-      const div = document.createElement('div');
-      div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 animate-in fade-in duration-100`;
+      // Check existing element
+      let div = document.getElementById('msg_el_' + msg.id);
+      const isNew = !div;
+
+      if (!div) {
+        div = document.createElement('div');
+        div.id = 'msg_el_' + msg.id;
+        div.className = `flex flex-col ${isMe ? 'items-end' : 'items-start'} space-y-1 animate-in fade-in duration-100`;
+      }
 
       let mediaHtml = '';
       if (msg.media_url) {
@@ -784,13 +851,51 @@
         }
       }
 
+      // Seen status calculation
+      const seenList = msg.seen_by || [];
+      const othersSeen = seenList.filter(u => u.username !== msg.username);
+      const isSeenByOthers = othersSeen.length > 0;
+
+      let tickHtml = '';
+      if (isMe) {
+        if (msg.pending) {
+          tickHtml = `<span class="text-indigo-200 text-[10px]" title="Gönderiliyor...">⏳</span>`;
+        } else if (isSeenByOthers) {
+          tickHtml = `
+            <span class="inline-flex items-center gap-0.5 text-cyan-300 font-bold text-[11px] cursor-pointer hover:underline" onclick="openSeenInfoModal('${msg.id}')" title="Görüldü (${othersSeen.length} kişi)">
+              <span>✓✓</span>
+              <span class="text-[9px] opacity-90">(${othersSeen.length})</span>
+            </span>
+          `;
+        } else {
+          tickHtml = `<span class="text-indigo-200 font-bold text-[11px] cursor-pointer" onclick="openSeenInfoModal('${msg.id}')" title="İletildi (Henüz kimse görmedi)">✓</span>`;
+        }
+      } else {
+        tickHtml = `
+          <button type="button" onclick="openSeenInfoModal('${msg.id}')" class="text-[10px] text-slate-400 hover:text-indigo-600 transition" title="Görüldü Bilgisi">
+            ℹ️
+          </button>
+        `;
+      }
+
       let textHtml = '';
       if (msg.text) {
         textHtml = `
           <div class="max-w-[85%] px-3.5 py-2 rounded-2xl text-xs leading-relaxed shadow-sm break-words ${
             isMe ? 'bg-indigo-600 text-white rounded-tr-none' : 'bg-slate-100 text-slate-800 rounded-tl-none border border-slate-200'
           }">
-            ${escapeHtml(msg.text)}
+            <div>${escapeHtml(msg.text)}</div>
+            <div class="flex items-center justify-end gap-1 mt-1 text-[10px] ${isMe ? 'text-indigo-200' : 'text-slate-400'}">
+              <span>${msg.time || ''}</span>
+              ${tickHtml}
+            </div>
+          </div>
+        `;
+      } else if (mediaHtml) {
+        textHtml = `
+          <div class="flex items-center justify-end gap-1 px-1 text-[10px] text-slate-400">
+            <span>${msg.time || ''}</span>
+            ${tickHtml}
           </div>
         `;
       }
@@ -800,20 +905,87 @@
           <span class="font-bold ${isAdmin ? 'text-amber-600' : 'text-slate-700'}">
             ${isAdmin ? '👑 ' : ''}${escapeHtml(msg.username)}
           </span>
-          <span>•</span>
-          <span>${msg.time || ''}</span>
         </div>
         ${mediaHtml}
         ${textHtml}
       `;
 
-      list.appendChild(div);
+      if (isNew) {
+        list.appendChild(div);
+      }
+
       if (shouldScroll) scrollToBottom();
     }
 
     function scrollToBottom() {
       const list = document.getElementById('chatMessageList');
       if (list) list.scrollTop = list.scrollHeight;
+    }
+
+    // --- Real-time Görüldü İşaretleme (Mark Visible Messages as Seen) ---
+    function markVisibleMessagesAsSeen() {
+      if (!currentUser || !currentUser.authenticated) return;
+      const unseenIds = [];
+      Object.values(chatMessagesMap).forEach(m => {
+        const seenList = m.seen_by || [];
+        if (!seenList.some(u => u.username === currentUser.username)) {
+          unseenIds.push(m.id);
+        }
+      });
+
+      if (unseenIds.length === 0) return;
+
+      if (chatWs && chatWs.readyState === WebSocket.OPEN) {
+        chatWs.send(JSON.stringify({
+          type: 'chat_seen',
+          message_ids: unseenIds
+        }));
+      } else {
+        const token = localStorage.getItem('session_token');
+        fetch('/api/chat/seen', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {})
+          },
+          body: JSON.stringify({ message_ids: unseenIds })
+        }).catch(() => {});
+      }
+    }
+
+    // --- Arka Plan Canlı Senkronizasyon (Polling Fallback) ---
+    async function syncChatMessages() {
+      try {
+        const token = localStorage.getItem('session_token');
+        if (!token || !currentUser.authenticated) return;
+        const res = await fetch('/api/chat/messages', {
+          headers: { 'Authorization': `Bearer ${token}` }
+        });
+        if (!res.ok) return;
+        const data = await res.json();
+        const msgs = data.messages || [];
+
+        let newArrived = false;
+        msgs.forEach(m => {
+          if (!displayedMessageIds.has(m.id)) {
+            newArrived = true;
+            appendChatMessage(m, true);
+          } else {
+            // Update seen status if changed
+            const existing = chatMessagesMap[m.id];
+            if (existing && JSON.stringify(existing.seen_by) !== JSON.stringify(m.seen_by)) {
+              chatMessagesMap[m.id] = m;
+              appendChatMessage(m, false);
+            }
+          }
+        });
+
+        if (newArrived && isChatDrawerOpen) {
+          markVisibleMessagesAsSeen();
+        }
+      } catch (e) {
+        // silent sync error
+      }
     }
 
     // --- Media Selection & Sending ---
@@ -863,6 +1035,7 @@
       if (preview) preview.classList.add('hidden');
     }
 
+    // --- Mesaj Gönderme (Anında Ekran Düşmesi & 0 Gecikme) ---
     async function handleSendChatMessage(e) {
       if (e) e.preventDefault();
       const input = document.getElementById('chatInputText');
@@ -875,6 +1048,26 @@
 
       let mediaUrl = null;
       let mediaType = null;
+
+      const tempId = 'temp_' + Date.now() + '_' + Math.random().toString(36).substr(2, 5);
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+
+      // Create optimistic message
+      const optimisticMsg = {
+        id: tempId,
+        username: currentUser.username,
+        role: currentUser.role,
+        text: text,
+        media_url: selectedChatMediaFile ? URL.createObjectURL(selectedChatMediaFile) : null,
+        media_type: selectedChatMediaType,
+        time: currentTime,
+        seen_by: [{ username: currentUser.username, role: currentUser.role, time: currentTime }],
+        pending: true
+      };
+
+      // IMMEDIATELY render into chat window (0 ms lag!)
+      appendChatMessage(optimisticMsg, true);
+      input.value = '';
 
       try {
         if (selectedChatMediaFile) {
@@ -898,9 +1091,9 @@
           }
           mediaUrl = upData.file_url;
           mediaType = upData.media_type;
+          optimisticMsg.media_url = mediaUrl;
         }
 
-        input.value = '';
         cancelChatMediaSelection();
 
         // Send via WebSocket if open
@@ -909,10 +1102,11 @@
             type: 'chat',
             text: text,
             media_url: mediaUrl,
-            media_type: mediaType
+            media_type: mediaType,
+            temp_id: tempId
           }));
         } else {
-          // Fallback HTTP
+          // Send via HTTP fallback
           const token = localStorage.getItem('session_token');
           const headers = token ? { 'Authorization': `Bearer ${token}` } : {};
           const formData = new FormData();
@@ -920,20 +1114,101 @@
           if (mediaUrl) formData.append('media_url', mediaUrl);
           if (mediaType) formData.append('media_type', mediaType);
 
-          await fetch('/api/chat/send', {
+          const res = await fetch('/api/chat/send', {
             method: 'POST',
             body: formData,
             headers
           });
+          const data = await res.json();
+          if (data && data.message) {
+            // Replace temp message with server message
+            const oldEl = document.getElementById('msg_el_' + tempId);
+            if (oldEl) oldEl.remove();
+            displayedMessageIds.delete(tempId);
+            delete chatMessagesMap[tempId];
+            appendChatMessage(data.message, true);
+          }
         }
       } catch (err) {
         alert('Mesaj gönderilemedi: ' + err.message);
+        // Remove failed optimistic message
+        const failedEl = document.getElementById('msg_el_' + tempId);
+        if (failedEl) failedEl.remove();
+        displayedMessageIds.delete(tempId);
+        delete chatMessagesMap[tempId];
       } finally {
         if (sendBtn) {
           sendBtn.disabled = false;
           sendBtn.innerHTML = originalBtnText;
         }
       }
+    }
+
+    // --- Görüldü Bilgisi Ekranı (Seen Info Modal) ---
+    function openSeenInfoModal(msgId) {
+      const msg = chatMessagesMap[msgId];
+      if (!msg) return;
+
+      const modal = document.getElementById('chatSeenInfoModal');
+      const countEl = document.getElementById('seenInfoCountText');
+      const previewEl = document.getElementById('seenInfoMessagePreview');
+      const userListEl = document.getElementById('seenInfoUserList');
+
+      const seenList = msg.seen_by || [];
+      const othersSeen = seenList.filter(u => u.username !== msg.username);
+
+      countEl.textContent = othersSeen.length > 0 
+        ? `${othersSeen.length} öğrenci / üye tarafından okundu` 
+        : 'Henüz kimse okumadı';
+
+      if (msg.text) {
+        previewEl.innerHTML = `<span class="font-bold text-slate-800">${escapeHtml(msg.username)}:</span> "${escapeHtml(msg.text)}"`;
+      } else if (msg.media_url) {
+        previewEl.innerHTML = `<span class="font-bold text-slate-800">${escapeHtml(msg.username)}:</span> [Medya / Görsel Paylaşımı]`;
+      } else {
+        previewEl.innerHTML = `<span class="font-bold text-slate-800">${escapeHtml(msg.username)}:</span> Mesaj`;
+      }
+
+      userListEl.innerHTML = '';
+      if (seenList.length === 0) {
+        userListEl.innerHTML = `<p class="text-xs text-slate-400 italic text-center py-4">Görüldü kaydı bulunmuyor.</p>`;
+      } else {
+        seenList.forEach(u => {
+          const isSender = u.username === msg.username;
+          const isAdminUser = u.role === 'admin';
+          const row = document.createElement('div');
+          row.className = 'flex items-center justify-between p-2.5 bg-slate-50 border border-slate-200/80 rounded-xl';
+          row.innerHTML = `
+            <div class="flex items-center gap-2.5">
+              <div class="w-8 h-8 rounded-full ${isAdminUser ? 'bg-amber-100 text-amber-700' : 'bg-indigo-100 text-indigo-700'} font-bold text-xs flex items-center justify-center">
+                ${escapeHtml(u.username.substring(0, 2).toUpperCase())}
+              </div>
+              <div>
+                <p class="text-xs font-bold text-slate-800 flex items-center gap-1">
+                  ${isAdminUser ? '<span>👑</span>' : ''}
+                  <span>${escapeHtml(u.username)}</span>
+                  ${isSender ? '<span class="text-[10px] text-slate-400 font-normal">(Gönderen)</span>' : ''}
+                </p>
+                <p class="text-[10px] text-slate-500">${isAdminUser ? 'Yönetici' : 'Öğrenci'}</p>
+              </div>
+            </div>
+            <div class="text-right">
+              <span class="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600">
+                <span>✓✓</span>
+                <span>${u.time || ''}</span>
+              </span>
+            </div>
+          `;
+          userListEl.appendChild(row);
+        });
+      }
+
+      modal.classList.remove('hidden');
+    }
+
+    function closeSeenInfoModal() {
+      const modal = document.getElementById('chatSeenInfoModal');
+      if (modal) modal.classList.add('hidden');
     }
 
     // --- Emoji Picker ---
@@ -975,16 +1250,14 @@
       EMOJI_LIST.forEach(e => {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'hover:scale-125 transition-transform p-1 rounded hover:bg-slate-100 flex items-center justify-center';
+        btn.className = 'hover:scale-125 transition-transform p-1.5 rounded-lg hover:bg-slate-100 flex items-center justify-center';
         btn.textContent = e;
-        btn.onclick = () => {
-          insertEmoji(e);
-        };
+        btn.onclick = () => insertEmoji(e);
         grid.appendChild(btn);
       });
     }
 
-    // --- GIF Picker ---
+    // --- GIF Picker (12 Genişletilmiş Kategori & Ferah Tasarım) ---
     function toggleGifPicker() {
       const gifPicker = document.getElementById('chatGifPicker');
       const emojiPicker = document.getElementById('chatEmojiPicker');
@@ -999,64 +1272,113 @@
 
     const CURATED_GIFS = {
       trend: [
-        { title: 'Tebrikler Party', url: 'https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif' },
-        { title: 'Beşlik Çak', url: 'https://media.giphy.com/media/3oEjHV0z8S7WM4MwnK/giphy.gif' },
+        { title: 'Tebrik Kutlama', url: 'https://media.giphy.com/media/artj92V8o75VPL7AeQ/giphy.gif' },
+        { title: 'Çak Bir Beşlik', url: 'https://media.giphy.com/media/3oEjHV0z8S7WM4MwnK/giphy.gif' },
         { title: 'Harika Onay', url: 'https://media.giphy.com/media/111ebonMs90YLu/giphy.gif' },
-        { title: 'Dans Kutlama', url: 'https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif' },
+        { title: 'Mutluluk Dansı', url: 'https://media.giphy.com/media/blSTtZehjAZ8I/giphy.gif' },
         { title: 'Kedi Şaşkın', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' },
-        { title: 'Kutlama Konfeti', url: 'https://media.giphy.com/media/l41lT4n6ylgW2hh04/giphy.gif' }
+        { title: 'Konfeti Yağmuru', url: 'https://media.giphy.com/media/l41lT4n6ylgW2hh04/giphy.gif' },
+        { title: 'Popcorn Keyfi', url: 'https://media.giphy.com/media/t3cL1iXeWH8fS/giphy.gif' },
+        { title: 'Süper Fikir', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' }
       ],
       study: [
-        { title: 'Hızlı Çalışma', url: 'https://media.giphy.com/media/unQ3IJU2RG7DO/giphy.gif' },
-        { title: 'Kitap Okuma', url: 'https://media.giphy.com/media/26ybvVb95UINnoOWk/giphy.gif' },
-        { title: 'Düşünme', url: 'https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif' },
-        { title: 'Not Çıkarma', url: 'https://media.giphy.com/media/LHZyixOnHwDDy/giphy.gif' },
-        { title: 'Kütüphane', url: 'https://media.giphy.com/media/ule4akeXnY9Mb2kfTM/giphy.gif' },
-        { title: 'Beyin Çalışıyor', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' }
-      ],
-      celebrate: [
-        { title: 'Konfeti Tebrik', url: 'https://media.giphy.com/media/l41lT4n6ylgW2hh04/giphy.gif' },
-        { title: 'Alkış Bravo', url: 'https://media.giphy.com/media/l3q2XhfQ8oCkm1GhO/giphy.gif' },
-        { title: 'Başardık', url: 'https://media.giphy.com/media/nXxOjZrbnbRxS/giphy.gif' },
-        { title: 'Kupa Şampiyon', url: 'https://media.giphy.com/media/26u4cqiYI30juCOGY/giphy.gif' }
+        { title: 'Hızlı Yazma / Not', url: 'https://media.giphy.com/media/unQ3IJU2RG7DO/giphy.gif' },
+        { title: 'Kitap Kurdu', url: 'https://media.giphy.com/media/26ybvVb95UINnoOWk/giphy.gif' },
+        { title: 'Formül Düşünme', url: 'https://media.giphy.com/media/3o7btPCcdNniyf0ArS/giphy.gif' },
+        { title: 'Önemli Not Çıkarma', url: 'https://media.giphy.com/media/LHZyixOnHwDDy/giphy.gif' },
+        { title: 'Kütüphanede Sabah', url: 'https://media.giphy.com/media/ule4akeXnY9Mb2kfTM/giphy.gif' },
+        { title: 'Beyin Fırtınası', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
+        { title: 'Çalışma Disiplini', url: 'https://media.giphy.com/media/l0HlHFRbmaZtBRhXG/giphy.gif' }
       ],
       coffee: [
-        { title: 'Kahve Dökme', url: 'https://media.giphy.com/media/3oriO04qxVReM5rJEA/giphy.gif' },
-        { title: 'Uykusuzluk', url: 'https://media.giphy.com/media/NWg7M1VlT101W/giphy.gif' },
-        { title: 'Sabah Kahvesi', url: 'https://media.giphy.com/media/oZEBLugoTdzxK/giphy.gif' },
-        { title: 'Enerji Bitti', url: 'https://media.giphy.com/media/d2lcHJTG5Tscg/giphy.gif' }
+        { title: 'Taze Kahve Dökme', url: 'https://media.giphy.com/media/3oriO04qxVReM5rJEA/giphy.gif' },
+        { title: 'Uykusuz Çalışanlar', url: 'https://media.giphy.com/media/NWg7M1VlT101W/giphy.gif' },
+        { title: 'Sabah Kafeini', url: 'https://media.giphy.com/media/oZEBLugoTdzxK/giphy.gif' },
+        { title: 'Enerjim Bitti', url: 'https://media.giphy.com/media/d2lcHJTG5Tscg/giphy.gif' },
+        { title: 'Çay / Kahve Molası', url: 'https://media.giphy.com/media/3o85xGocUH8RYoDKKs/giphy.gif' }
+      ],
+      celebrate: [
+        { title: 'Konfeti & Coşku', url: 'https://media.giphy.com/media/l41lT4n6ylgW2hh04/giphy.gif' },
+        { title: 'Bravo Alkış', url: 'https://media.giphy.com/media/l3q2XhfQ8oCkm1GhO/giphy.gif' },
+        { title: 'Başardık Arkadaş', url: 'https://media.giphy.com/media/nXxOjZrbnbRxS/giphy.gif' },
+        { title: 'Kupa & Şampiyon', url: 'https://media.giphy.com/media/26u4cqiYI30juCOGY/giphy.gif' },
+        { title: 'Havai Fişek', url: 'https://media.giphy.com/media/26tOZ42Mg6pbTUPHW/giphy.gif' }
       ],
       funny: [
         { title: 'Gülmekten Kırılma', url: 'https://media.giphy.com/media/10JhviFuU2gWD6/giphy.gif' },
         { title: 'Komik Kedi', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' },
-        { title: 'Mısır Yeme', url: 'https://media.giphy.com/media/t3cL1iXeWH8fS/giphy.gif' },
-        { title: 'Göz Devirme', url: 'https://media.giphy.com/media/3oEjI67Egb8G9jqs3m/giphy.gif' }
+        { title: 'Göz Devirme', url: 'https://media.giphy.com/media/3oEjI67Egb8G9jqs3m/giphy.gif' },
+        { title: 'Yok Artık', url: 'https://media.giphy.com/media/5VKbvrjxpVJCM/giphy.gif' },
+        { title: 'Kahkaha Tufanı', url: 'https://media.giphy.com/media/bC9czlgCMtw4cj8RgH/giphy.gif' }
       ],
       clap: [
         { title: 'Ayakta Alkış', url: 'https://media.giphy.com/media/l3q2XhfQ8oCkm1GhO/giphy.gif' },
-        { title: 'Leonardo Bravo', url: 'https://media.giphy.com/media/g9582DNuQppxC/giphy.gif' },
-        { title: 'Onay Alkış', url: 'https://media.giphy.com/media/NEvPzZ8bd1V4Y/giphy.gif' }
+        { title: 'Leonardo Gatsby', url: 'https://media.giphy.com/media/g9582DNuQppxC/giphy.gif' },
+        { title: 'Harika Performans', url: 'https://media.giphy.com/media/NEvPzZ8bd1V4Y/giphy.gif' },
+        { title: 'Coşkulu Alkış', url: 'https://media.giphy.com/media/7rj2ZgttvgomY/giphy.gif' }
       ],
       exam: [
         { title: 'Sınav Panik', url: 'https://media.giphy.com/media/5VKbvrjxpVJCM/giphy.gif' },
-        { title: 'Ağlama Ders', url: 'https://media.giphy.com/media/d2lcHJTG5Tscg/giphy.gif' },
-        { title: 'Şok Oldum', url: 'https://media.giphy.com/media/PUBxelpjgh5ry/giphy.gif' },
-        { title: 'Beyin Yandı', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' }
+        { title: 'Ağlayarak Çalışma', url: 'https://media.giphy.com/media/d2lcHJTG5Tscg/giphy.gif' },
+        { title: 'Soruları Görünce', url: 'https://media.giphy.com/media/PUBxelpjgh5ry/giphy.gif' },
+        { title: 'Beyin Yandı', url: 'https://media.giphy.com/media/26ufdipQqU2lhNA4g/giphy.gif' },
+        { title: 'Sınavdan Çıkış', url: 'https://media.giphy.com/media/13d2jHlSlxklVe/giphy.gif' }
+      ],
+      motivation: [
+        { title: 'Asla Pes Etme', url: 'https://media.giphy.com/media/ACcXRXwUqJ6Ok/giphy.gif' },
+        { title: 'Odaklan & Başar', url: 'https://media.giphy.com/media/3o7TKTDnUxE0g2fSE8/giphy.gif' },
+        { title: 'Zafer Sevinci', url: 'https://media.giphy.com/media/3o7qDEq2bMbcbPRQ2c/giphy.gif' },
+        { title: 'Süper Güç', url: 'https://media.giphy.com/media/l0HlBO7eyXzSZkJri/giphy.gif' }
+      ],
+      cats: [
+        { title: 'Ders Çalışan Kedi', url: 'https://media.giphy.com/media/JIX9t2j0ZTN9S/giphy.gif' },
+        { title: 'Bilgisayar Yazan Kedi', url: 'https://media.giphy.com/media/unQ3IJU2RG7DO/giphy.gif' },
+        { title: 'Uykucu Kedi', url: 'https://media.giphy.com/media/VbnUQIRNNGLzfNVcvH/giphy.gif' },
+        { title: 'Kedi Şaşkın', url: 'https://media.giphy.com/media/mlvseq9yvZhba/giphy.gif' }
+      ],
+      medical: [
+        { title: 'Stetoskop / Doktor', url: 'https://media.giphy.com/media/3oKIPnAiaMCws8nOsE/giphy.gif' },
+        { title: 'Hemşire & Bakım', url: 'https://media.giphy.com/media/l41JRsph73VokN6ik/giphy.gif' },
+        { title: 'Kalp Atışı EKG', url: 'https://media.giphy.com/media/l2JdZ53ZTs3W2CHYY/giphy.gif' },
+        { title: 'Tıp Eğitimi', url: 'https://media.giphy.com/media/xT5LMHxhOfscxPfIfm/giphy.gif' }
+      ],
+      food: [
+        { title: 'Pizza Molası', url: 'https://media.giphy.com/media/1108D2tVaUN3eo/giphy.gif' },
+        { title: 'Acıktık', url: 'https://media.giphy.com/media/3o7buhm1O1b51v4JZK/giphy.gif' },
+        { title: 'Hamburger', url: 'https://media.giphy.com/media/eSQKqqFIbJYUU/giphy.gif' },
+        { title: 'Tatlı Molası', url: 'https://media.giphy.com/media/3osxYoufeOGOYG38xG/giphy.gif' }
+      ],
+      sleep: [
+        { title: 'Uyuya Kalmak', url: 'https://media.giphy.com/media/NWg7M1VlT101W/giphy.gif' },
+        { title: 'İyi Geceler', url: 'https://media.giphy.com/media/l2JIaYp6P3WT5VEys/giphy.gif' },
+        { title: 'Kitap Üstünde Uyuma', url: 'https://media.giphy.com/media/mguPrVJAnEHIY/giphy.gif' },
+        { title: 'Alarm Çaldı', url: 'https://media.giphy.com/media/xT8qB5sar8diPTeZnG/giphy.gif' }
       ]
     };
 
     function loadGifCategory(cat) {
+      // Highlight active pill
+      const pills = document.querySelectorAll('.gif-cat-btn');
+      pills.forEach(p => {
+        if (p.getAttribute('data-cat') === cat) {
+          p.className = 'gif-cat-btn px-2.5 py-1 rounded-full bg-indigo-600 text-white font-bold whitespace-nowrap shadow-sm transition';
+        } else {
+          p.className = 'gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition';
+        }
+      });
+
       const grid = document.getElementById('gifGrid');
       if (!grid) return;
       grid.innerHTML = '';
       const list = CURATED_GIFS[cat] || CURATED_GIFS['trend'];
       list.forEach(g => {
         const card = document.createElement('div');
-        card.className = 'relative rounded-xl overflow-hidden cursor-pointer group bg-slate-100 hover:ring-2 hover:ring-indigo-500 transition aspect-video flex items-center justify-center';
+        card.className = 'relative rounded-xl overflow-hidden cursor-pointer group bg-slate-100 border border-slate-200/80 shadow-sm hover:shadow-md hover:border-indigo-400 transition-all duration-200 h-28 flex items-center justify-center';
         card.innerHTML = `
-          <img src="${g.url}" loading="lazy" alt="${g.title}" class="w-full h-full object-cover">
-          <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-            <span class="text-white text-[11px] font-bold px-2 py-1 bg-black/60 rounded">Gönder</span>
+          <img src="${g.url}" loading="lazy" alt="${g.title}" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200">
+          <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent p-1.5 pt-4 transition flex items-center justify-between">
+            <span class="text-[10px] text-white font-medium truncate">${g.title}</span>
+            <span class="text-[9px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded shadow-sm opacity-0 group-hover:opacity-100 transition">Gönder</span>
           </div>
         `;
         card.onclick = () => sendDirectGif(g.url);
@@ -1074,9 +1396,9 @@
       }
       gifSearchTimeout = setTimeout(async () => {
         const grid = document.getElementById('gifGrid');
-        grid.innerHTML = '<div class="col-span-2 py-6 text-center text-xs text-slate-400">GIF aranıyor...</div>';
+        grid.innerHTML = '<div class="col-span-2 py-6 text-center text-xs text-slate-400">🔍 GIF aranıyor...</div>';
         try {
-          const res = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=dc6zaTOxFJmzC&limit=10&q=${encodeURIComponent(q)}`);
+          const res = await fetch(`https://api.giphy.com/v1/gifs/search?api_key=dc6zaTOxFJmzC&limit=12&q=${encodeURIComponent(q)}`);
           if (res.ok) {
             const data = await res.json();
             if (data.data && data.data.length > 0) {
@@ -1084,11 +1406,12 @@
               data.data.forEach(item => {
                 const gifUrl = item.images.fixed_height_small ? item.images.fixed_height_small.url : item.images.original.url;
                 const card = document.createElement('div');
-                card.className = 'relative rounded-xl overflow-hidden cursor-pointer group bg-slate-100 hover:ring-2 hover:ring-indigo-500 transition aspect-video flex items-center justify-center';
+                card.className = 'relative rounded-xl overflow-hidden cursor-pointer group bg-slate-100 border border-slate-200/80 shadow-sm hover:shadow-md hover:border-indigo-400 transition-all duration-200 h-28 flex items-center justify-center';
                 card.innerHTML = `
-                  <img src="${gifUrl}" loading="lazy" class="w-full h-full object-cover">
-                  <div class="absolute inset-0 bg-black/40 opacity-0 group-hover:opacity-100 flex items-center justify-center transition">
-                    <span class="text-white text-[11px] font-bold px-2 py-1 bg-black/60 rounded">Gönder</span>
+                  <img src="${gifUrl}" loading="lazy" class="w-full h-full object-cover group-hover:scale-105 transition-transform duration-200">
+                  <div class="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/85 via-black/40 to-transparent p-1.5 pt-4 transition flex items-center justify-between">
+                    <span class="text-[10px] text-white font-medium truncate">${escapeHtml(item.title || 'GIF')}</span>
+                    <span class="text-[9px] bg-indigo-600 text-white font-bold px-1.5 py-0.5 rounded shadow-sm opacity-0 group-hover:opacity-100 transition">Gönder</span>
                   </div>
                 `;
                 card.onclick = () => sendDirectGif(gifUrl);
@@ -1101,17 +1424,33 @@
           console.log('Giphy fetch error:', err);
         }
         loadGifCategory('trend');
-      }, 400);
+      }, 350);
     }
 
     async function sendDirectGif(gifUrl) {
       toggleGifPicker();
+      const tempId = 'temp_' + Date.now();
+      const currentTime = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+      const optimisticMsg = {
+        id: tempId,
+        username: currentUser.username,
+        role: currentUser.role,
+        text: '',
+        media_url: gifUrl,
+        media_type: 'gif',
+        time: currentTime,
+        seen_by: [{ username: currentUser.username, role: currentUser.role, time: currentTime }],
+        pending: true
+      };
+      appendChatMessage(optimisticMsg, true);
+
       if (chatWs && chatWs.readyState === WebSocket.OPEN) {
         chatWs.send(JSON.stringify({
           type: 'chat',
           text: '',
           media_url: gifUrl,
-          media_type: 'gif'
+          media_type: 'gif',
+          temp_id: tempId
         }));
       } else {
         const token = localStorage.getItem('session_token');
@@ -1120,7 +1459,15 @@
         formData.append('text', '');
         formData.append('media_url', gifUrl);
         formData.append('media_type', 'gif');
-        await fetch('/api/chat/send', { method: 'POST', body: formData, headers });
+        const res = await fetch('/api/chat/send', { method: 'POST', body: formData, headers });
+        const data = await res.json();
+        if (data && data.message) {
+          const oldEl = document.getElementById('msg_el_' + tempId);
+          if (oldEl) oldEl.remove();
+          displayedMessageIds.delete(tempId);
+          delete chatMessagesMap[tempId];
+          appendChatMessage(data.message, true);
+        }
       }
     }
 
@@ -2002,7 +2349,7 @@
   </button>
 
   <!-- ==================== SLIDE-OVER CHAT & VOICE DRAWER ==================== -->
-  <div id="chatDrawer" class="fixed inset-y-0 right-0 z-50 w-full sm:w-[400px] bg-white border-l border-slate-200 shadow-2xl flex flex-col transform translate-x-full transition-transform duration-300 ease-in-out">
+  <div id="chatDrawer" class="fixed inset-y-0 right-0 z-50 w-full sm:w-[440px] bg-white border-l border-slate-200 shadow-2xl flex flex-col transform translate-x-full transition-transform duration-300 ease-in-out">
     <!-- Drawer Header -->
     <div class="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-900 text-white">
       <div class="flex items-center gap-2.5">
@@ -2059,24 +2406,35 @@
       </div>
 
       <!-- GIF Picker Popover -->
-      <div id="chatGifPicker" class="hidden border-t border-slate-200 bg-white p-3 flex flex-col max-h-72 shadow-inner">
-        <div class="flex items-center justify-between mb-2">
-          <span class="text-[11px] font-bold text-slate-500 uppercase tracking-wider">GIF Gönder</span>
-          <button type="button" onclick="toggleGifPicker()" class="text-slate-400 hover:text-slate-700 text-xs font-bold px-1.5 py-0.5 rounded">✕</button>
+      <div id="chatGifPicker" class="hidden border-t border-slate-200 bg-slate-50 p-3.5 flex flex-col max-h-80 shadow-lg transition-all">
+        <div class="flex items-center justify-between mb-2.5">
+          <div class="flex items-center gap-1.5">
+            <span class="text-sm">🎬</span>
+            <span class="text-xs font-bold text-slate-800">GIF Gönder</span>
+            <span class="text-[10px] text-slate-400">Canlı Tepki Paylaşımı</span>
+          </div>
+          <button type="button" onclick="toggleGifPicker()" class="text-slate-400 hover:text-slate-700 text-xs font-bold p-1 rounded-md hover:bg-slate-200 transition">✕</button>
         </div>
-        <div class="mb-2">
-          <input type="text" id="gifSearchInput" placeholder="GIF ara... (örn: tebrik, ders, kedi)" oninput="handleGifSearch(event)" class="w-full px-3 py-1.5 bg-slate-50 border border-slate-200 rounded-lg text-xs focus:outline-none focus:ring-1 focus:ring-indigo-500">
+        <div class="relative mb-2.5">
+          <input type="text" id="gifSearchInput" placeholder="GIF ara... (örn: tebrik, ders, alkış, kedi, kahve)" oninput="handleGifSearch(event)" class="w-full pl-8 pr-3 py-1.5 bg-white border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-indigo-500 shadow-sm">
+          <span class="absolute left-2.5 top-2 text-slate-400 text-xs">🔍</span>
         </div>
-        <div class="flex gap-1.5 overflow-x-auto pb-1.5 mb-2 no-scrollbar text-[11px]">
-          <button type="button" onclick="loadGifCategory('trend')" class="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-600 font-semibold whitespace-nowrap">🔥 Trend</button>
-          <button type="button" onclick="loadGifCategory('study')" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold whitespace-nowrap hover:bg-slate-200">📚 Ders</button>
-          <button type="button" onclick="loadGifCategory('celebrate')" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold whitespace-nowrap hover:bg-slate-200">🎉 Tebrik</button>
-          <button type="button" onclick="loadGifCategory('coffee')" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold whitespace-nowrap hover:bg-slate-200">☕ Kahve</button>
-          <button type="button" onclick="loadGifCategory('funny')" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold whitespace-nowrap hover:bg-slate-200">😂 Komik</button>
-          <button type="button" onclick="loadGifCategory('clap')" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold whitespace-nowrap hover:bg-slate-200">👏 Alkış</button>
-          <button type="button" onclick="loadGifCategory('exam')" class="px-2 py-0.5 rounded-full bg-slate-100 text-slate-600 font-semibold whitespace-nowrap hover:bg-slate-200">😱 Sınav</button>
+        <!-- 12 Expanded Categories -->
+        <div class="flex gap-1.5 overflow-x-auto pb-2 mb-2 custom-scrollbar text-[11px]" id="gifCategoryPills">
+          <button type="button" onclick="loadGifCategory('trend')" data-cat="trend" class="gif-cat-btn px-2.5 py-1 rounded-full bg-indigo-600 text-white font-bold whitespace-nowrap shadow-sm transition">🔥 Trend</button>
+          <button type="button" onclick="loadGifCategory('study')" data-cat="study" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">📚 Ders</button>
+          <button type="button" onclick="loadGifCategory('coffee')" data-cat="coffee" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">☕ Kahve</button>
+          <button type="button" onclick="loadGifCategory('celebrate')" data-cat="celebrate" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">🎉 Tebrik</button>
+          <button type="button" onclick="loadGifCategory('funny')" data-cat="funny" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">😂 Komik</button>
+          <button type="button" onclick="loadGifCategory('clap')" data-cat="clap" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">👏 Alkış</button>
+          <button type="button" onclick="loadGifCategory('exam')" data-cat="exam" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">😱 Sınav</button>
+          <button type="button" onclick="loadGifCategory('motivation')" data-cat="motivation" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">⚡ Başarı</button>
+          <button type="button" onclick="loadGifCategory('cats')" data-cat="cats" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">🐈 Sevimli</button>
+          <button type="button" onclick="loadGifCategory('medical')" data-cat="medical" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">🩺 Tıp/Sağlık</button>
+          <button type="button" onclick="loadGifCategory('food')" data-cat="food" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">🍕 Yemek</button>
+          <button type="button" onclick="loadGifCategory('sleep')" data-cat="sleep" class="gif-cat-btn px-2.5 py-1 rounded-full bg-white text-slate-700 font-semibold whitespace-nowrap hover:bg-slate-100 border border-slate-200 transition">😴 Uyku</button>
         </div>
-        <div id="gifGrid" class="flex-1 grid grid-cols-2 gap-2 overflow-y-auto custom-scrollbar max-h-48 pr-1"></div>
+        <div id="gifGrid" class="flex-1 grid grid-cols-2 gap-2.5 overflow-y-auto custom-scrollbar max-h-52 p-0.5"></div>
       </div>
 
       <!-- Quick Reaction Bar -->
@@ -2198,6 +2556,33 @@
         <a id="mediaLightboxDownload" href="#" download target="_blank" class="px-4 py-1.5 bg-white/20 hover:bg-white/30 text-white text-xs font-semibold rounded-xl backdrop-blur transition flex items-center gap-1.5">
           <span>⬇ İndir</span>
         </a>
+      </div>
+    </div>
+  </div>
+
+
+  <!-- ==================== GÖRÜLDÜ BİLGİSİ EKRANI (SEEN INFO MODAL) ==================== -->
+  <div id="chatSeenInfoModal" class="fixed inset-0 z-[70] bg-slate-900/60 backdrop-blur-sm hidden flex items-center justify-center p-4" onclick="closeSeenInfoModal()">
+    <div class="bg-white rounded-2xl max-w-sm w-full p-5 shadow-2xl space-y-4" onclick="event.stopPropagation()">
+      <div class="flex items-center justify-between border-b border-slate-100 pb-3">
+        <div class="flex items-center gap-2.5">
+          <div class="w-8 h-8 rounded-xl bg-indigo-50 text-indigo-600 flex items-center justify-center font-bold text-base">👁️</div>
+          <div>
+            <h4 class="font-bold text-slate-900 text-sm">Görüldü Bilgisi</h4>
+            <p class="text-[11px] text-slate-400" id="seenInfoCountText">Mesajı okuyan kişiler</p>
+          </div>
+        </div>
+        <button onclick="closeSeenInfoModal()" class="text-slate-400 hover:text-slate-700 font-bold p-1">✕</button>
+      </div>
+
+      <div id="seenInfoMessagePreview" class="p-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs text-slate-700 max-h-20 overflow-y-auto"></div>
+
+      <div class="space-y-2 max-h-56 overflow-y-auto custom-scrollbar pr-1" id="seenInfoUserList"></div>
+
+      <div class="flex justify-end pt-2 border-t border-slate-100">
+        <button onclick="closeSeenInfoModal()" class="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold rounded-xl text-xs transition">
+          Kapat
+        </button>
       </div>
     </div>
   </div>
