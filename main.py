@@ -16,16 +16,42 @@ from pypdf import PdfReader, PdfWriter
 
 app = FastAPI(title="Ders Notları & PDF Portalı")
 
-CHAT_MEDIA_DIR = "chat_media"
+import asyncio
+
+# --- Persistent Data Directory Configuration ---
+DATA_DIR = os.getenv("DATA_DIR")
+if not DATA_DIR:
+    if os.path.exists("/data") and os.access("/data", os.W_OK):
+        DATA_DIR = "/data"
+    elif os.path.exists("/var/data") and os.access("/var/data", os.W_OK):
+        DATA_DIR = "/var/data"
+    else:
+        DATA_DIR = "."
+
+os.makedirs(DATA_DIR, exist_ok=True)
+CHAT_MEDIA_DIR = os.path.join(DATA_DIR, "chat_media")
 os.makedirs(CHAT_MEDIA_DIR, exist_ok=True)
 app.mount("/chat_media", StaticFiles(directory=CHAT_MEDIA_DIR), name="chat_media")
 
-
-BASE_UPLOAD_DIR = "uploads"
-AUTH_FILE = "users.json"
-COURSES_FILE = "courses.json"
+BASE_UPLOAD_DIR = os.path.join(DATA_DIR, "uploads")
+AUTH_FILE = os.path.join(DATA_DIR, "users.json")
+COURSES_FILE = os.path.join(DATA_DIR, "courses.json")
+CHAT_FILE = os.path.join(DATA_DIR, "chat_messages.json")
+RATINGS_FILE = os.path.join(DATA_DIR, "ratings.json")
+COMMENTS_FILE = os.path.join(DATA_DIR, "comments.json")
 SESSION_TIMEOUT_SECONDS = 24 * 3600  # 24 hours
 os.makedirs(BASE_UPLOAD_DIR, exist_ok=True)
+
+# Migrate starter files to DATA_DIR if on a persistent disk and not present
+if DATA_DIR != ".":
+    for sf in ["courses.json", "users.json", "chat_messages.json"]:
+        src = sf
+        dst = os.path.join(DATA_DIR, sf)
+        if os.path.exists(src) and not os.path.exists(dst):
+            try:
+                shutil.copyfile(src, dst)
+            except Exception:
+                pass
 
 DEFAULT_COURSES = ["Kadın Doğum Hemşireliği", "İç Hastalıkları", "Cerrahi Hastalıkları", "Sağlık Tanılaması", "Genel"]
 
@@ -537,12 +563,54 @@ async def upload_chat_media(request: Request, file: UploadFile = File(...)):
         "filename": orig_name
     }
 
+@app.post("/api/chat/drive")
+async def send_chat_drive(
+    request: Request,
+    drive_url: str = Form(...),
+    title: Optional[str] = Form(None),
+    note: Optional[str] = Form("")
+):
+    user = get_current_user(request)
+    if not user:
+        raise HTTPException(status_code=401, detail="Lütfen önce giriş yapın.")
+
+    m = re.search(r'/d/([a-zA-Z0-9_-]+)', drive_url) or re.search(r'id=([a-zA-Z0-9_-]+)', drive_url)
+    file_id = m.group(1) if m else drive_url.strip()
+
+    clean_title = (title or "").strip() or "Google Drive Dosyası"
+    clean_note = (note or "").strip()
+
+    now_time = time.strftime("%H:%M")
+    msg_obj = {
+        "id": "msg_" + secrets.token_hex(6),
+        "username": user["username"],
+        "role": user.get("role", "user"),
+        "text": clean_note,
+        "media_url": drive_url.strip(),
+        "media_type": "drive",
+        "title": clean_title,
+        "file_id": file_id,
+        "time": now_time,
+        "seen_by": [
+            {
+                "username": user["username"],
+                "role": user.get("role", "user"),
+                "time": now_time
+            }
+        ]
+    }
+    save_chat_message(msg_obj)
+    await room_manager.broadcast({"type": "chat_message", "message": msg_obj})
+    return {"status": "success", "message": msg_obj}
+
 @app.post("/api/chat/send")
 async def send_chat_message(
     request: Request,
     text: Optional[str] = Form(""),
     media_url: Optional[str] = Form(None),
-    media_type: Optional[str] = Form(None)
+    media_type: Optional[str] = Form(None),
+    title: Optional[str] = Form(None),
+    file_id: Optional[str] = Form(None)
 ):
     user = get_current_user(request)
     if not user:
@@ -559,6 +627,8 @@ async def send_chat_message(
         "text": clean_text,
         "media_url": media_url or None,
         "media_type": media_type or None,
+        "title": (title or "").strip() or None,
+        "file_id": (file_id or "").strip() or None,
         "time": now_time,
         "seen_by": [
             {
@@ -600,6 +670,8 @@ async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
                         user_info = data.get("users", {}).get(username, {})
                         user_role = user_info.get("role", "user")
                         now_time = time.strftime("%H:%M")
+                        title = msg.get("title")
+                        file_id = msg.get("file_id")
                         msg_obj = {
                             "id": "msg_" + secrets.token_hex(6),
                             "username": username,
@@ -607,6 +679,8 @@ async def websocket_room(websocket: WebSocket, token: Optional[str] = None):
                             "text": text,
                             "media_url": media_url or None,
                             "media_type": media_type or None,
+                            "title": (title or "").strip() or None,
+                            "file_id": (file_id or "").strip() or None,
                             "time": now_time,
                             "seen_by": [
                                 {
@@ -901,3 +975,86 @@ async def download_range(request: Request, course: Optional[str] = None, filenam
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run("main:app", host="0.0.0.0", port=8000, reload=True)
+
+# --- Keep-Alive / Anti-Sleep Ping Worker ---
+@app.get("/api/ping")
+async def api_ping():
+    return {
+        "status": "ok",
+        "message": "Pong! Site 7/24 kesintisiz aktif.",
+        "time": time.time(),
+        "date": time.strftime("%Y-%m-%d %H:%M:%S")
+    }
+
+async def self_keep_alive():
+    await asyncio.sleep(15)
+    while True:
+        try:
+            ext_url = os.getenv("RENDER_EXTERNAL_URL") or os.getenv("SITE_URL")
+            if ext_url:
+                ping_url = f"{ext_url.rstrip('/')}/api/ping"
+                req = urllib.request.Request(ping_url, headers={"User-Agent": "RenderKeepAlive/1.0"})
+                with urllib.request.urlopen(req, timeout=10) as resp:
+                    pass
+        except Exception:
+            pass
+        # Ping every 9 minutes (Render sleeps after 15 min inactivity)
+        await asyncio.sleep(540)
+
+@app.on_event("startup")
+async def startup_event():
+    asyncio.create_task(self_keep_alive())
+
+# --- Admin Backup & Restore Endpoints ---
+@app.get("/api/admin/backup")
+async def download_backup(request: Request):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yalnızca admin yedek alabilir.")
+    
+    backup_data = {
+        "timestamp": time.time(),
+        "date": time.strftime("%Y-%m-%d %H:%M:%S"),
+        "courses": get_all_courses(),
+        "users": load_auth_data().get("users", {}),
+        "chat_messages": load_chat_messages(),
+    }
+    content = json.dumps(backup_data, ensure_ascii=False, indent=2)
+    filename = f"ders_portali_yedek_{time.strftime('%Y%m%d_%H%M')}.json"
+    return Response(
+        content=content,
+        media_type="application/json",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'}
+    )
+
+@app.post("/api/admin/restore")
+async def upload_restore(request: Request, file: UploadFile = File(...)):
+    user = get_current_user(request)
+    if not user or user.get("role") != "admin":
+        raise HTTPException(status_code=403, detail="Yalnızca admin yedek yükleyebilir.")
+        
+    try:
+        content = await file.read()
+        data = json.loads(content.decode("utf-8"))
+        
+        # Restore courses
+        if "courses" in data and isinstance(data["courses"], list):
+            with open(COURSES_FILE, "w", encoding="utf-8") as f:
+                json.dump(data["courses"], f, ensure_ascii=False, indent=2)
+            for c in data["courses"]:
+                os.makedirs(os.path.join(BASE_UPLOAD_DIR, c), exist_ok=True)
+                
+        # Restore users
+        if "users" in data and isinstance(data["users"], dict):
+            auth_data = load_auth_data()
+            auth_data["users"].update(data["users"])
+            save_auth_data(auth_data)
+            
+        # Restore chat
+        if "chat_messages" in data and isinstance(data["chat_messages"], list):
+            with open(CHAT_FILE, "w", encoding="utf-8") as f:
+                json.dump(data["chat_messages"], f, ensure_ascii=False, indent=2)
+                
+        return {"status": "success", "message": "Yedek başarıyla geri yüklendi!"}
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Yedek geri yüklenirken hata: {str(e)}")

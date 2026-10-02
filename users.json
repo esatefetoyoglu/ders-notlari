@@ -1,0 +1,78 @@
+{
+  "users": {
+    "admin": {
+      "username": "admin",
+      "password_hash": "552bf6a51c813a5764772de3b11bb3b48c17c9debacb7dda56924d5745b37727",
+      "salt": "87bc10cc7c35790adccff3ed03fbcd0e",
+      "role": "admin"
+    },
+    "student1": {
+      "username": "student1",
+      "password_hash": "768b5f17a0e97c52564ac51105db1e1b9aeba781c66b62da5058ae57185889a0",
+      "salt": "681d4dc383ef08127e28da51f2c22413",
+      "role": "user"
+    }
+  },
+  "sessions": {
+    "ff19fbed76bc412c88a239581ba2808821378b8ac3bc8f97": {
+      "username": "admin",
+      "last_active": 1790884506.2719822
+    },
+    "f19da96eb220ddf950529e40689cc31471a42b10bf235a9f": {
+      "username": "admin",
+      "last_active": 1790884564.3445845
+    },
+    "59d037fb7a119341f5bbfaf4c2f30cb34ceabf1ea684fcc5": {
+      "username": "admin",
+      "last_active": 1790885569.003781
+    },
+    "8e9a1924a3b66acd8ecff4ad6cadaad633bb5fc9cc5c91f2": {
+      "username": "admin",
+      "last_active": 1790912328.3830726
+    },
+    "9d74357e406b8b014ce35c5c472e9493091e6b596f3ebb79": {
+      "username": "admin",
+      "last_active": 1790913528.9751208
+    },
+    "8a084efc84d6522f04ec06fc736ffbd7fad66cf80e1f7fbc": {
+      "username": "admin",
+      "last_active": 1790913553.1614738
+    },
+    "479828ef23229cd971c2c479f962eb943878b02ed643f93d": {
+      "username": "admin",
+      "last_active": 1790913672.9081721
+    },
+    "cccd51614a154f1d45ac1ed2ee31bde32340fc00402ec371": {
+      "username": "admin",
+      "last_active": 1790914991.6564953
+    },
+    "1e28fd58b204ad077999d5960dee32734df16156a9408631": {
+      "username": "student1",
+      "last_active": 1790914991.6720572
+    },
+    "6effaf5d43901887c3527a574c20df552f476ae54ac2ca32": {
+      "username": "student1",
+      "last_active": 1790914991.7036912
+    },
+    "f86df97adf6106a25b3b4c93a578dee49ca93e8522174a51": {
+      "username": "admin",
+      "last_active": 1790915002.531959
+    },
+    "bee45b2d1767872e060a2692664d15f36295a42ef06da5e3": {
+      "username": "student1",
+      "last_active": 1790915002.5092633
+    },
+    "4f548d47570e2a23cab2d04574a4bf092541bf68d5ef4a78": {
+      "username": "admin",
+      "last_active": 1790915068.627098
+    },
+    "c58cb6cb978d999aa4a475e5afd38b283ffc5c5808983bb4": {
+      "username": "admin",
+      "last_active": 1790916324.489834
+    },
+    "f4ef14d232e595e80eefb8a54a99a3fd027aa6ccd97c0611": {
+      "username": "admin",
+      "last_active": 1790916415.4997895
+    }
+  }
+}
